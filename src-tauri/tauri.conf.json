@@ -1,0 +1,71 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dictate",
+  "version": "0.1.0",
+  "identifier": "dev.dictate.mic",
+  "build": {
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeDevCommand": "npm run ui:dev",
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Dictate",
+        "width": 400,
+        "height": 400,
+        "minWidth": 360,
+        "minHeight": 400,
+        "resizable": false,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "toast",
+        "title": "Dictate",
+        "url": "toast.html",
+        "width": 380,
+        "height": 72,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "visible": false,
+        "center": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "ChatGPT dictation, anywhere you type",
+    "longDescription": "Tap a hotkey, talk, and your words are transcribed by ChatGPT and pasted wherever the cursor is.",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "Utter Local Signing",
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist",
+      "infoPlist": "Info.plist"
+    }
+  }
+}

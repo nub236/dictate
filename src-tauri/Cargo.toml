@@ -1,0 +1,55 @@
+[package]
+name = "dictate"
+version = "0.1.0"
+description = "ChatGPT dictation, anywhere you type"
+authors = ["dictate"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# macos-private-api gives the toast window a fully transparent background so it
+# can have rounded corners. It is required whenever a window is transparent.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hound = "3.5"
+handy-keys = "0.3"
+handy-recorder = "0.1"
+once_cell = "1"
+rphonetic = "4.0.0"
+strsim = "0.11"
+arboard = "3.7.0"
+enigo = "0.6"
+open = "5.4.4"
+# Registers Dictate as a login item (LaunchAgent on macOS, a Run key on
+# Windows) so the hotkey is live after a restart instead of the app having to
+# be opened by hand.
+tauri-plugin-autostart = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Converts the toast window into an NSPanel. A plain NSWindow cannot be drawn
+# over another app's full-screen Space, whatever its window level or collection
+# behaviour says; the class has to be NSPanel. Same crate Handy's overlay uses.
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat", "block2", "std"] }
+block2 = { version = "0.6", features = ["alloc"] }
+objc2 = "0.6"
+# Measures History menu rows in points: the tray submenu flips to the left when
+# its widest item does not fit to the right of the menu, and a character count
+# cannot keep that width steady because the system font is proportional.
+objc2-app-kit = { version = "0.3", features = ["NSFont", "NSAttributedString", "NSStringDrawing", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary"] }
+# Same accessibility prompt Handy uses; registers the app in the Accessibility
+# list instead of quietly asking for a different TCC service.
+macos-accessibility-client = "0.0.1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

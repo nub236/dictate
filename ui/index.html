@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dictate</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="app">
+    <!-- ---------------- welcome ---------------- -->
+    <section class="view" id="view-welcome">
+      <h1>Dictate</h1>
+      <p class="lede">Press a key, talk, and the text appears at your cursor. Transcribed with your
+        ChatGPT account.</p>
+      <ol class="steps">
+        <li>Press your hotkey and speak.</li>
+        <li>Press it again when you're done.</li>
+        <li>The text is pasted where you're typing.</li>
+        <li>Press Escape while dictating to cancel.</li>
+      </ol>
+      <footer class="actions">
+        <button class="primary" id="btn-welcome-continue">Continue</button>
+      </footer>
+    </section>
+
+    <!-- ---------------- sign in ---------------- -->
+    <section class="view" id="view-signin" hidden>
+      <h1 id="signin-heading">Sign in with ChatGPT</h1>
+      <p class="lede">Uses your ChatGPT plan. No API key, no extra charges.</p>
+      <div class="row box">
+        <div class="grow">
+          <div class="row-title" id="signin-title">Not signed in</div>
+          <div class="row-sub" id="signin-sub">You'll finish in your browser</div>
+        </div>
+        <button class="chip" id="btn-signout" hidden>Sign out</button>
+      </div>
+      <p class="hint" id="signin-hint"><span id="signin-hint-a">A browser window opens.</span><span
+          id="signin-hint-b">Approve there, then come back.</span></p>
+      <footer class="actions">
+        <button class="ghost" id="btn-signin-back">Back</button>
+        <button class="primary" id="btn-signin">Continue with ChatGPT</button>
+      </footer>
+    </section>
+
+    <!-- ---------------- permissions ---------------- -->
+    <section class="view" id="view-permissions" hidden>
+      <h1>Permissions</h1>
+      <p class="lede" id="perm-lede">macOS needs two. Audio is only recorded while you dictate.</p>
+      <div class="row box">
+        <div class="grow">
+          <div class="row-title">Microphone</div>
+          <div class="row-sub">Only while dictating</div>
+        </div>
+        <button class="chip" data-open="mic">Open</button>
+        <button class="chip" id="btn-perm-mic-allow" hidden>Allow microphone</button>
+        <span class="state" id="perm-mic-state">Checking…</span>
+      </div>
+      <div class="row box" id="perm-ax-row">
+        <div class="grow">
+          <div class="row-title">Accessibility</div>
+          <div class="row-sub">For the hotkey and pasting</div>
+        </div>
+        <button class="chip" data-open="accessibility">Open</button>
+        <span class="state" id="perm-ax-state">Checking…</span>
+      </div>
+      <p class="hint" id="perm-hint"><span id="perm-hint-a"></span><span id="perm-hint-b"></span></p>
+      <footer class="actions">
+        <button class="ghost" id="btn-perm-back">Back</button>
+        <button class="secondary" id="btn-perm-recheck">Check again</button>
+        <button class="primary" id="btn-perm-continue" disabled>Continue</button>
+      </footer>
+    </section>
+
+    <!-- ---------------- hotkey (onboarding) ---------------- -->
+    <section class="view" id="view-hotkey" hidden>
+      <h1>Hotkey</h1>
+      <p class="lede">
+        <span>Click the box, then press the keys you want.</span>
+        <span>A modifier on its own works too.</span>
+      </p>
+      <p class="hint" id="hotkey-current">Saved shortcut: Right Option</p>
+      <div class="capture" id="capture" tabindex="0">
+        <div class="capture-value" id="capture-value">Right Option</div>
+        <div class="capture-hint" id="capture-hint">Click, then press your shortcut</div>
+      </div>
+      <p class="status" id="hotkey-status"></p>
+      <footer class="actions">
+        <button class="ghost" id="btn-hotkey-back">Back</button>
+        <button class="primary" id="btn-hotkey-save">Continue</button>
+      </footer>
+    </section>
+
+    <!-- ---------------- keywords ---------------- -->
+    <section class="view" id="view-keywords" hidden>
+      <h1>Keywords</h1>
+      <p class="lede">Names and terms Dictate should get right.</p>
+      <div class="form form-single">
+        <label class="field">
+          <input id="keyword-input" class="text-input" type="text" placeholder="Add a name or term"
+            autocomplete="off" spellcheck="false" />
+        </label>
+        <button class="add-button" id="btn-keyword-add">Add</button>
+      </div>
+      <p class="empty" id="keywords-empty">No keywords yet.</p>
+      <div class="keyword-list" id="keyword-list"></div>
+      <footer class="actions">
+        <button class="ghost" id="btn-keywords-back">Back</button>
+        <button class="primary" id="btn-keywords-continue">Continue</button>
+      </footer>
+    </section>
+
+    <!-- ---------------- snippets ---------------- -->
+    <section class="view" id="view-snippets" hidden>
+      <h1>Snippets</h1>
+      <p class="lede">Say a short phrase, get something longer.</p>
+      <div class="form">
+        <label class="field">
+          <span class="field-label">When I say</span>
+          <input id="snippet-trigger" class="text-input" type="text" placeholder="my email"
+            autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span class="field-label">Replace with</span>
+          <input id="snippet-replacement" class="text-input" type="text" placeholder="you@example.com"
+            autocomplete="off" spellcheck="false" />
+        </label>
+        <button class="add-button" id="btn-snippet-add">Add</button>
+      </div>
+      <p class="hint">Commas separate alternatives. An empty replacement deletes.</p>
+      <p class="empty" id="snippets-empty">No snippets yet.</p>
+      <div class="keyword-list" id="snippet-list"></div>
+      <footer class="actions">
+        <button class="ghost" id="btn-snippets-back">Back</button>
+        <button class="primary" id="btn-snippets-continue">Continue</button>
+      </footer>
+    </section>
+
+    <!-- ---------------- done ---------------- -->
+    <section class="view" id="view-done" hidden>
+      <h1>Ready</h1>
+      <p class="lede">
+        <span>Dictate lives in the menu bar now.</span>
+        <span>Press <b id="done-hotkey">Right Option</b> to dictate anywhere.</span>
+      </p>
+      <p class="hint">Your last five dictations are in the menu bar under <b>History</b>.
+        Click one to copy it. <b>Keywords</b> and <b>Snippets</b> are in the menu bar too.</p>
+      <footer class="actions">
+        <button class="primary" id="btn-done">Done</button>
+      </footer>
+    </section>
+
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,453 @@
+:root {
+  color-scheme: light dark;
+
+  --bg: #ffffff;
+  --panel: #f6f6f7;
+  --panel-strong: #ededf0;
+  --chip: #ebebee;
+  --hover: #efeff1;
+  --line: #e3e3e6;
+  --text: #1d1d1f;
+  --muted: #5b5b62;
+  --accent: #0071e3;
+  --danger: #d70015;
+  --primary-bg: #1d1d1f;
+  --primary-fg: #ffffff;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-xs: 5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --panel: #262626;
+    --panel-strong: #303032;
+    --chip: #343437;
+    --hover: #2c2c2e;
+    --line: #3a3a3c;
+    --text: #f5f5f7;
+    --muted: #adadb4;
+    --accent: #0a84ff;
+    --danger: #ff6961;
+    --primary-bg: #f5f5f7;
+    --primary-fg: #1d1d1f;
+    --ok: #3fb950;
+    --warn: #d29922;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+  padding: 16px;
+  display: flex;
+}
+
+.view {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.view[hidden] { display: none; }
+
+h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.lede {
+  margin: -4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* Helper text breaks at its sentences rather than wherever the box runs out:
+   at 400pt wide the system font fits roughly 55 characters, which is just
+   short of these strings, leaving two or three words alone on a line. An
+   empty span is display:block with no height, so a variant with only one
+   sentence leaves no gap. */
+.lede > span,
+.hint > span { display: block; }
+
+.empty {
+  margin: 0;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.empty[hidden] { display: none; }
+
+b { color: var(--text); font-weight: 600; }
+
+.steps {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+  font-size: 12.5px;
+}
+
+.box {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.row { display: flex; align-items: center; gap: 10px; }
+.row[hidden] { display: none; }
+.grow { flex: 1; min-width: 0; }
+
+.row-title { font-size: 13px; font-weight: 550; }
+
+.row-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.state.ok { color: var(--ok); }
+.state.bad { color: var(--warn); }
+
+.chip {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chip:hover { background: var(--panel-strong); }
+
+/* Once a permission is granted its "Open" button is only there for revoking,
+   so it stops competing with the state text. */
+.chip.is-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.chip.is-quiet:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* form */
+
+.form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.form-single { grid-template-columns: minmax(0, 1fr) auto; }
+
+.field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--muted);
+}
+
+/* keywords */
+
+.text-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.text-input::placeholder { color: var(--muted); opacity: .75; }
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, .18);
+}
+
+@media (prefers-color-scheme: dark) {
+  .text-input:focus { box-shadow: 0 0 0 3px rgba(10, 132, 255, .28); }
+}
+
+.keyword-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.keyword-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.keyword-row:hover,
+.snippet-row:hover { background: var(--hover); }
+
+.keyword-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+/* snippets */
+
+.snippet-row {
+  display: grid;
+  grid-template-columns: 38% 12px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.snippet-from {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.snippet-alt {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--chip);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snippet-more {
+  flex: none;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.snippet-arrow {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.snippet-to {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--text);
+}
+
+.snippet-to.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* hotkey capture */
+
+.capture {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 16px 12px;
+  text-align: center;
+  cursor: pointer;
+  outline: none;
+}
+
+.capture.active {
+  border-color: var(--text);
+  background: var(--bg);
+}
+
+/* Same ring the text inputs use, so "this is where typing goes" reads the same
+   on both screens. The box is focused as soon as the view opens. */
+.capture:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, .18);
+}
+
+@media (prefers-color-scheme: dark) {
+  .capture:focus { box-shadow: 0 0 0 3px rgba(10, 132, 255, .28); }
+}
+
+.capture-value {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.capture-hint {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.status {
+  margin: 0;
+  min-height: 15px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.status.ok { color: var(--ok); }
+.status.bad { color: var(--warn); }
+
+/* buttons */
+
+.actions {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+button.primary, button.secondary, button.ghost {
+  font: inherit;
+  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+button.primary {
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+}
+button.primary:disabled {
+  background: var(--panel);
+  color: var(--muted);
+  border-color: var(--line);
+  cursor: default;
+}
+
+button.secondary {
+  background: var(--bg);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--text);
+  padding-left: 6px;
+  padding-right: 6px;
+}
+button.ghost:hover { background: var(--panel); }
+
+/* The Add button: filled so it reads as clickable, but quieter than the page's
+   primary action (Continue/Done). Shared by Keywords and Snippets, and fixed at
+   the input height so the two line up on the same baseline. */
+.add-button {
+  font: inherit;
+  font-size: 12.5px;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--chip);
+  color: var(--text);
+  cursor: pointer;
+}
+.add-button:hover:not(:disabled) { background: var(--panel-strong); }
+.add-button:disabled {
+  background: var(--panel);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  /* Clears the button row: the footer sits 16pt off the bottom and its buttons
+     are ~28pt tall, so anything below this lands on Back/Continue. */
+  bottom: 52px;
+  transform: translateX(-50%);
+  /* Without this a fixed element sized by "left: 50%" is capped at half the
+     window and wraps: a 2-line toast twice as tall as it needs to be. */
+  width: max-content;
+  max-width: calc(100% - 32px);
+  text-align: center;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; }

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Dictate</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+    }
+    body {
+      font: 12.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .toast, .pill {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      pointer-events: none;
+    }
+    .toast {
+      max-width: 340px;
+      padding: 8px 13px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: rgba(28, 28, 30, .94);
+      color: #f5f5f7;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .3);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      opacity: 0;
+      transform: translate(-50%, calc(-50% + 6px));
+      transition: opacity .16s ease, transform .16s ease;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translate(-50%, -50%);
+    }
+    /* Failures get an amber edge, so a dropped dictation does not read like
+       "History cleared". */
+    .toast.error {
+      border-color: rgba(255, 179, 64, .5);
+      background: rgba(58, 40, 16, .96);
+      color: #ffd9a0;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .3), 0 0 0 3px rgba(255, 179, 64, .12);
+    }
+    /* Dictation pill. Small on purpose: it sits at the bottom of the screen while
+       you talk, so it should read at a glance without pulling the eye. */
+    .pill {
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      /* Fixed 64x32 capsule, with the bars centred inside it. */
+      width: 64px;
+      height: 32px;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, .14);
+      border-radius: 999px;
+      background: rgba(28, 28, 30, .93);
+      /* A hairline keeps a dark pill from vanishing on a dark window. */
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .38);
+      overflow: hidden;
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(.92);
+      transition: opacity .15s ease, transform .15s ease;
+    }
+    .pill.show {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+    .pill i {
+      flex: none;
+      /* Square, fully rounded caps: at rest the bar is a dot. */
+      width: 4px;
+      height: 4px;
+      border-radius: 2px;
+      background: #f5f5f7;
+      /* Height is driven per frame by the envelope in toast.js, so only the
+         working-state fade is transitioned here. */
+      transition: opacity .15s ease;
+    }
+    /* Working: the meter goes away entirely and only a soft highlight sweeps
+       across, so it can't be mistaken for the mic still hearing you. */
+    .pill.working i { opacity: 0; }
+    .sheen {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      background: linear-gradient(
+        100deg,
+        transparent 25%,
+        rgba(255, 255, 255, .27) 50%,
+        transparent 75%
+      );
+    }
+    .pill.working .sheen {
+      opacity: 1;
+      animation: sweep 1.15s ease-in-out infinite;
+    }
+    @keyframes sweep {
+      from { transform: translateX(-100%); }
+      to { transform: translateX(100%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .pill.working .sheen { animation: none; opacity: .5; }
+    }
+  </style>
+</head>
+<body>
+  <div class="pill" id="pill" aria-hidden="true">
+    <span class="sheen"></span><i></i><i></i><i></i><i></i>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script src="toast.js"></script>
+</body>
+</html>
+
