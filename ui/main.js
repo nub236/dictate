@@ -958,6 +958,10 @@ async function init() {
     const fresh = await invoke("bootstrap");
     app = { ...app, ...fresh };
   } catch { /* first run, defaults are fine */ }
+  // The stylesheet branches on this where the platforms lay text out
+  // differently; leave it empty when the platform is unknown, which keeps the
+  // macOS spacing rather than guessing.
+  document.body.dataset.platform = app.platform || "";
   renderSignin();
   show("welcome");
 }

@@ -98,6 +98,12 @@ h1 {
 .lede > span,
 .hint > span { display: block; }
 
+/* The account hint's two sentences fit on one line in the Windows and Linux
+   fonts at this window's width; macOS runs wider and keeps the break at the
+   sentence. */
+body[data-platform="windows"] #signin-hint > span,
+body[data-platform="linux"] #signin-hint > span { display: inline; }
+
 .empty {
   margin: 0;
   flex: 1;
