@@ -79,11 +79,24 @@ function updateHotkeyState(message) {
   }
 }
 
+// macOS is the only platform that asks the user for grants before it can
+// record; Windows and Linux can record as soon as the app runs, so their setup
+// has no permissions screen at all.
+function needsPermissions() {
+  return (app.platform || perms.platform || "macos") === "macos";
+}
+
+function afterSignIn() {
+  return needsPermissions() ? "permissions" : "hotkey";
+}
+
 function show(view) {
   // After setup the tour has no way back into it: it is the entry point of the
   // setup chain, so Back from the account screen used to land there with no way
   // out but clicking through every screen again.
   if (view === "welcome" && app.onboarded) view = "signin";
+  // Nothing to grant on Windows or Linux, so nothing to show there.
+  if (view === "permissions" && !needsPermissions()) view = "hotkey";
   if (currentView !== view) signInInFlight = false;
   if (currentView === "hotkey" && view !== "hotkey") {
     invoke("resume_hotkey").catch(() => {});
@@ -236,24 +249,16 @@ function stopSigninPolling() {
 
 /* ---------------------------------------------------------------- permissions */
 
+// macOS only: this screen is skipped on Windows and Linux, which need no
+// grants from the user.
 function renderPermissions() {
   const mic = $("perm-mic-state");
   const ax = $("perm-ax-state");
   const permission = perms.mic_permission || "unknown";
-  // Only macOS asks for two grants; Windows and Linux just record.
-  const mac = (perms.platform || app.platform || "macos") === "macos";
-  $("perm-ax-row").hidden = !mac;
-  // The lede fits on one line; the hint below it does not, so that one breaks at
-  // its sentences instead of stranding a few words where the box runs out.
-  $("perm-lede").textContent = mac
-    ? "macOS needs two. Audio is only recorded while you dictate."
-    : "Dictate needs the microphone. Audio is only recorded while you dictate.";
-  $("perm-hint-a").textContent = mac
-    ? "macOS adds Dictate to each list the first time it asks."
-    : "If the microphone reads Blocked, allow Dictate in your system privacy settings, then check again.";
-  $("perm-hint-b").textContent = mac
-    ? "If a switch is off, turn it on and come back."
-    : "";
+  $("perm-lede").textContent = "macOS needs two. Audio is only recorded while you dictate.";
+  $("perm-hint-a").textContent = "macOS adds Dictate to each list the first time it asks.";
+  $("perm-hint-b").textContent = "If a switch is off, turn it on and come back.";
+
   // Words only: the box and cross markers read as stray glyphs at 11.5px, and
   // the word already carries the state without relying on colour.
   const allow = $("btn-perm-mic-allow");
@@ -272,7 +277,7 @@ function renderPermissions() {
     const micOpen = document.querySelector('button[data-open="mic"]');
     if (micOpen) micOpen.hidden = true;
   } else {
-    mic.textContent = permission === "not_determined" && mac ? "Needs permission" : "Needed";
+    mic.textContent = permission === "not_determined" ? "Needs permission" : "Needed";
     mic.className = "state bad";
     allow.hidden = false;
     allow.textContent = "Allow microphone";
@@ -281,7 +286,7 @@ function renderPermissions() {
   ax.className = `state ${perms.accessibility ? "ok" : "bad"}`;
   // Once both are granted there is nothing left to check, so the manual nudge
   // only appears while something is actually missing.
-  const complete = perms.mic && (perms.accessibility || !mac);
+  const complete = perms.mic && perms.accessibility;
   $("btn-perm-recheck").hidden = complete;
   $("btn-perm-continue").disabled = !complete;
   // "Open" stays reachable so a grant can be revoked, but stops competing with
@@ -804,8 +809,8 @@ function wire() {
   });
 
   $("btn-signin").addEventListener("click", () => {
-    if (app.signed_in) show("permissions");
-    else beginSignIn("permissions");
+    if (app.signed_in) show(afterSignIn());
+    else beginSignIn(afterSignIn());
   });
   $("btn-signin-back").addEventListener("click", () => show("welcome"));
   $("btn-signout").addEventListener("click", async () => {
@@ -857,7 +862,9 @@ function wire() {
     });
   }
 
-  $("btn-hotkey-back").addEventListener("click", () => show("permissions"));
+  // Back is one step, not "the screen after signing in": on Windows and Linux
+  // the shortcut follows the account screen directly.
+  $("btn-hotkey-back").addEventListener("click", () => show(needsPermissions() ? "permissions" : "signin"));
   $("btn-hotkey-save").addEventListener("click", saveHotkey);
 
   $("btn-keyword-add").addEventListener("click", addKeyword);
