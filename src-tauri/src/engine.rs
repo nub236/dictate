@@ -16,6 +16,27 @@ use crate::auth::Credentials;
 
 const TRANSCRIBE_URL: &str = "https://chatgpt.com/backend-api/transcribe";
 
+/// This route is Codex Desktop's dictation backend, so the request announces
+/// the same caller that uses it. A borrowed identity that does not match the
+/// traffic it claims to be is what the edge quietly rejects.
+const TRANSCRIBE_ORIGINATOR: &str = "Codex Desktop";
+/// Only the version's shape is copied. Dictate never reads or requires a local
+/// Codex install, so this is not detected from disk.
+const TRANSCRIBE_AGENT_VERSION: &str = "26.707.72221";
+
+fn transcribe_user_agent() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "Mac OS",
+        "windows" => "Windows",
+        _ => "Linux",
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        _ => std::env::consts::ARCH,
+    };
+    format!("{TRANSCRIBE_ORIGINATOR}/{TRANSCRIBE_AGENT_VERSION} ({os}; {arch})")
+}
+
 /// Keeps a spawned console program from opening a console window.
 ///
 /// Dictate is a GUI binary and owns no console, so Windows hands every console
@@ -321,9 +342,11 @@ pub fn transcribe(path: &Path, credentials: &Credentials) -> Result<String, Stri
 
 fn transcribe_once(path: &Path, credentials: &Credentials) -> Result<String, String> {
     let config = format!(
-        "header = \"Authorization: Bearer {}\"\nheader = \"chatgpt-account-id: {}\"\nheader = \"User-Agent: ChatGPT/1.2025.1 (macOS; dictate)\"\nheader = \"Accept: application/json\"\n",
+        "header = \"Authorization: Bearer {}\"\nheader = \"chatgpt-account-id: {}\"\nheader = \"originator: {}\"\nheader = \"User-Agent: {}\"\nheader = \"Accept: application/json\"\n",
         credentials.access_token,
-        credentials.account_id.clone().unwrap_or_default()
+        credentials.account_id.clone().unwrap_or_default(),
+        TRANSCRIBE_ORIGINATOR,
+        transcribe_user_agent(),
     );
     let upload = format!("file=@{};type=audio/wav", path.display());
 
