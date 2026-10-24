@@ -122,12 +122,16 @@ fn account_id_from(id_token: &str, access_token: &str) -> Option<String> {
     None
 }
 
-fn random_hex(bytes: usize) -> String {
+/// Random bytes from the operating system, hex-encoded.
+///
+/// This must not fall back to a fixed value when entropy is unavailable: the
+/// PKCE verifier and the OAuth state both come from here, so a constant would
+/// make the challenge guessable and the state check vacuous.
+fn random_hex(bytes: usize) -> Result<String, String> {
     let mut buffer = vec![0u8; bytes];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        let _ = file.read_exact(&mut buffer);
-    }
-    buffer.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::fill(&mut buffer)
+        .map_err(|error| format!("could not generate a secure random value: {error}"))?;
+    Ok(buffer.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn sha256(data: &[u8]) -> [u8; 32] {
@@ -297,9 +301,9 @@ pub fn valid(path: &Path) -> Result<Credentials, String> {
 // --------------------------------------------------------------------------- //
 
 pub fn login(path: &Path) -> Result<Credentials, String> {
-    let verifier = random_hex(48);
+    let verifier = random_hex(48)?;
     let challenge = b64url(&sha256(verifier.as_bytes()));
-    let state = random_hex(16);
+    let state = random_hex(16)?;
 
     let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT)).map_err(|_| {
         format!("Port {CALLBACK_PORT} is busy. Close any other sign-in window and try again.")
@@ -330,19 +334,31 @@ pub fn login(path: &Path) -> Result<Credentials, String> {
                 let request = String::from_utf8_lossy(&buffer[..read]);
                 let first = request.lines().next().unwrap_or("");
 
-                if first.contains(CALLBACK_PATH) {
-                    let target = first.split(' ').nth(1).unwrap_or("");
-                    if let Some((_, query)) = target.split_once('?') {
-                        for pair in query.split('&') {
-                            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-                            match key {
-                                "code" => code = Some(percent_decode(value)),
-                                "error" => failure = Some(percent_decode(value)),
-                                "state" if percent_decode(value) != state => {
-                                    failure = Some("state mismatch".into())
-                                }
-                                _ => {}
+                let target = first.split(' ').nth(1).unwrap_or("");
+                let path = target.split('?').next().unwrap_or("");
+
+                // Only the redirect itself may end the wait. Anything else that
+                // reaches this port — a browser asking for a favicon, another
+                // app probing it — is answered and ignored, because breaking out
+                // here failed the sign-in before the code had arrived.
+                if path != CALLBACK_PATH {
+                    let response =
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                    continue;
+                }
+
+                if let Some((_, query)) = target.split_once('?') {
+                    for pair in query.split('&') {
+                        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                        match key {
+                            "code" => code = Some(percent_decode(value)),
+                            "error" => failure = Some(percent_decode(value)),
+                            "state" if percent_decode(value) != state => {
+                                failure = Some("state mismatch".into())
                             }
+                            _ => {}
                         }
                     }
                 }

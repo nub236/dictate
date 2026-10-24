@@ -731,6 +731,7 @@ dependencies = [
  "arboard",
  "block2",
  "enigo",
+ "getrandom 0.3.4",
  "handy-keys",
  "handy-recorder",
  "hound",
