@@ -1134,9 +1134,11 @@ fn open_privacy(kind: String) {
         // Windows keeps the microphone switch in Settings; there is no
         // per-app accessibility grant to open.
         if kind == "mic" {
-            let _ = Command::new("cmd")
-                .args(["/C", "start", "", "ms-settings:privacy-microphone"])
-                .spawn();
+            let mut command = Command::new("cmd");
+            command.args(["/C", "start", "", "ms-settings:privacy-microphone"]);
+            // cmd is a console program, so without this the window flashes.
+            engine::hide_console(&mut command);
+            let _ = command.spawn();
         }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

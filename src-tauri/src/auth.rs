@@ -189,25 +189,27 @@ fn save(path: &Path, credentials: &Credentials) -> Result<(), String> {
 
 fn token_request(body: Value) -> Result<Credentials, String> {
     let payload = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-    let mut child = Command::new("curl")
-        .args([
-            "-sS",
-            "--max-time",
-            "45",
-            "--http1.1",
-            "-X",
-            "POST",
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            "Accept: application/json",
-            "-d",
-            "@-",
-            TOKEN_URL,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut curl = Command::new("curl");
+    curl.args([
+        "-sS",
+        "--max-time",
+        "45",
+        "--http1.1",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "-H",
+        "Accept: application/json",
+        "-d",
+        "@-",
+        TOKEN_URL,
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    crate::engine::hide_console(&mut curl);
+    let mut child = curl
         .spawn()
         .map_err(|e| format!("could not reach the network: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {

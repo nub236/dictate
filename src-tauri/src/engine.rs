@@ -16,6 +16,25 @@ use crate::auth::Credentials;
 
 const TRANSCRIBE_URL: &str = "https://chatgpt.com/backend-api/transcribe";
 
+/// Keeps a spawned console program from opening a console window.
+///
+/// Dictate is a GUI binary and owns no console, so Windows hands every console
+/// program it starts a new console window — with curl that is a black rectangle
+/// flashing on screen for as long as the request runs. CREATE_NO_WINDOW is the
+/// documented way to ask for no console at all. Everywhere else this is a no-op.
+pub fn hide_console(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = command;
+    }
+}
+
 /// What the global keyboard listener reports to the app.
 pub enum HotkeySignal {
     /// The dictation shortcut was pressed.
@@ -309,23 +328,25 @@ fn transcribe_once(path: &Path, credentials: &Credentials) -> Result<String, Str
     let upload = format!("file=@{};type=audio/wav", path.display());
 
     // HTTP/1.1 matters: the edge blocks this endpoint when it arrives over HTTP/2.
-    let mut child = Command::new("curl")
-        .args([
-            "-sS",
-            "--max-time",
-            "180",
-            "--http1.1",
-            "-X",
-            "POST",
-            TRANSCRIBE_URL,
-            "-F",
-            &upload,
-            "-K",
-            "-",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut curl = Command::new("curl");
+    curl.args([
+        "-sS",
+        "--max-time",
+        "180",
+        "--http1.1",
+        "-X",
+        "POST",
+        TRANSCRIBE_URL,
+        "-F",
+        &upload,
+        "-K",
+        "-",
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    hide_console(&mut curl);
+    let mut child = curl
         .spawn()
         .map_err(|e| format!("could not reach ChatGPT: {e}"))?;
 
