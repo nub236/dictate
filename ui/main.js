@@ -997,12 +997,43 @@ function wire() {
   listen("goto", (event) => show(event.payload || "welcome"));
 }
 
+// Windows does not deliver the shortcut to the app's own focused window: its
+// keyboard hook never sees the key while this window is in front. The page does
+// receive it, which is the same route the shortcut confirmation already uses,
+// so a press here asks the backend to toggle instead.
+function watchWindowHotkey() {
+  if ((app.platform || "macos") === "macos") return;
+  let last = 0;
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      // The setup screen owns the keyboard: it is choosing a shortcut there.
+      if (currentView === "hotkey" || awaitingTest) return;
+      if (event.repeat) return;
+      // Escape cancels too, and it is deaf in the same state; a no-op when no
+      // recording is running.
+      if (event.key === "Escape") {
+        invoke("cancel_dictation").catch(() => {});
+        return;
+      }
+      if (hotkeyFromEvent(event) !== app.hotkey) return;
+      const now = Date.now();
+      if (now - last < 250) return;
+      last = now;
+      event.preventDefault();
+      invoke("toggle_dictation").catch(() => {});
+    },
+    true,
+  );
+}
+
 async function init() {
   wire();
   try {
     const fresh = await invoke("bootstrap");
     app = { ...app, ...fresh };
   } catch { /* first run, defaults are fine */ }
+  watchWindowHotkey();
   renderSignin();
   show("welcome");
 }

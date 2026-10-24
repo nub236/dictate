@@ -842,6 +842,23 @@ fn set_testing(value: bool) {
     debug_log(&format!("testing flag: {value}"));
 }
 
+/// Toggles a recording from inside the app's own window.
+///
+/// The Windows keyboard hook does not deliver keys to the window that has
+/// focus, so a focused app would never start a dictation. The page sees those
+/// keys instead and asks for the toggle through here.
+#[tauri::command]
+fn toggle_dictation(app: AppHandle) {
+    handle_toggle(&app);
+}
+
+/// Cancels a recording from inside the app's own window. Escape is a second
+/// hook registration, so it is deaf in the same state the shortcut is.
+#[tauri::command]
+fn cancel_dictation(app: AppHandle) {
+    cancel_recording(&app);
+}
+
 #[tauri::command]
 fn pause_hotkey(app: AppHandle) {
     debug_log("hotkey: paused for the setup screen");
@@ -1238,6 +1255,8 @@ fn main() {
             set_testing,
             pause_hotkey,
             resume_hotkey,
+            toggle_dictation,
+            cancel_dictation,
             mark_onboarded,
             complete_onboarding,
             open_privacy,
