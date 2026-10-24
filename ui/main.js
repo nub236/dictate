@@ -29,6 +29,7 @@ let injectBare = null;
 let awaitingTest = false;
 let testTimer = null;
 let testPoll = null;
+let windowHotkeyTest = null;
 let currentView = null;
 
 function log(message) {
@@ -557,6 +558,22 @@ function bareModifier(event) {
   }
 }
 
+// The shortcut a key event represents, in the same ids the capture box and the
+// Rust side use. Bare modifiers first, so right Control reads as "right_ctrl"
+// rather than as a Control combination.
+function hotkeyFromEvent(event) {
+  const bare = bareByCode[event.code] || (isModifierKey(event) ? bareModifier(event) : null);
+  if (bare) return bare;
+  const name = keyName(event.code);
+  if (!name) return null;
+  const mods = [];
+  if (event.metaKey) mods.push("cmd");
+  if (event.ctrlKey) mods.push("ctrl");
+  if (event.altKey) mods.push("alt");
+  if (event.shiftKey) mods.push("shift");
+  return mods.length ? [...mods, name].join("+") : name;
+}
+
 function isModifierKey(event) {
   return ["Alt", "Shift", "Control", "Meta", "CapsLock", "Fn", "OS"].includes(event.key) || event.keyCode === 63;
 }
@@ -672,7 +689,43 @@ function stopHotkeyTest() {
   clearInterval(testPoll);
   testTimer = null;
   testPoll = null;
+  if (windowHotkeyTest) {
+    window.removeEventListener("keydown", windowHotkeyTest, true);
+    windowHotkeyTest = null;
+  }
   invoke("set_testing", { value: false }).catch(() => {});
+}
+
+// Confirming the shortcut on Windows and Linux.
+//
+// macOS delivers a bare modifier only to the global keyboard tap, so there the
+// confirmation reads the app's hit counter. Windows sends the key to this
+// window as an ordinary keydown, and its keyboard hook is not something the
+// setup screen can rely on — so the shortcut is paused for the test and the
+// page itself recognises the press.
+function startWindowHotkeyTest() {
+  setStatus("hotkey-status", "Now press your shortcut once more to confirm…", "");
+  awaitingTest = true;
+  invoke("pause_hotkey").catch(() => {});
+  windowHotkeyTest = (event) => {
+    if (!awaitingTest) return;
+    if (hotkeyFromEvent(event) !== pendingHotkey) return;
+    event.preventDefault();
+    hotkeyConfirmed();
+  };
+  window.addEventListener("keydown", windowHotkeyTest, true);
+
+  testTimer = setTimeout(() => {
+    if (!awaitingTest) return;
+    stopHotkeyTest();
+    invoke("resume_hotkey").catch(() => {});
+    setStatus("hotkey-status", `Didn't catch it. Try the shortcut again.${hotkeyHint()}`, "bad");
+  }, 15000);
+}
+
+// Only macOS keeps a list of apps allowed to send keystrokes.
+function hotkeyHint() {
+  return app.platform === "macos" ? " Or check Accessibility." : "";
 }
 
 async function saveHotkey() {
@@ -686,16 +739,27 @@ async function saveHotkey() {
     app.engine_running = !!result.engine_running;
     updateHotkeyState();
     if (!result.engine_running) {
-      setStatus("hotkey-status", "macOS is blocking the hotkey — allow Dictate in Accessibility.", "bad");
+      setStatus(
+        "hotkey-status",
+        app.platform === "macos"
+          ? "macOS is blocking the hotkey — allow Dictate in Accessibility."
+          : "The keyboard listener could not start. Try a different shortcut.",
+        "bad",
+      );
       return;
     }
 
-    // Pressing the shortcut is what proves macOS really delivers it — a new
-    // combination may be swallowed by another app, and first setup may have a
-    // dead tap. Re-saving the shortcut that already works needs no test.
+    // Pressing the shortcut is what proves the system really delivers it — a new
+    // combination may belong to another app. Re-saving the shortcut that already
+    // works needs no test.
     if (unchanged && app.onboarded) {
       setStatus("hotkey-status", `✓ ${prettyHotkey(pendingHotkey)} is registered`, "ok");
       show("keywords");
+      return;
+    }
+
+    if (app.platform !== "macos") {
+      startWindowHotkeyTest();
       return;
     }
 
@@ -716,7 +780,7 @@ async function saveHotkey() {
       if (!awaitingTest) return;
       stopHotkeyTest();
       invoke("set_testing", { value: false }).catch(() => {});
-      setStatus("hotkey-status", "Didn't catch it. Try the shortcut again, or check Accessibility.", "bad");
+      setStatus("hotkey-status", `Didn't catch it. Try the shortcut again.${hotkeyHint()}`, "bad");
     }, 15000);
   } catch (error) {
     setStatus("hotkey-status", String(error), "bad");
@@ -727,6 +791,7 @@ function hotkeyConfirmed() {
   if (!awaitingTest) return;
   stopHotkeyTest();
   invoke("set_testing", { value: false }).catch(() => {});
+  invoke("resume_hotkey").catch(() => {});
   setStatus("hotkey-status", `✓ ${prettyHotkey(pendingHotkey)} is registered`, "ok");
   show("keywords");
 }

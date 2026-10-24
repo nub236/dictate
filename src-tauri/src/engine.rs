@@ -550,6 +550,9 @@ pub fn parse_hotkey(name: &str) -> Result<(), String> {
 pub struct HotkeyService {
     manager: Arc<Mutex<HotkeyManager>>,
     cancel_id: Arc<Mutex<Option<HotkeyId>>>,
+    /// The dictation shortcut registered right now; `None` while the setup
+    /// screen is capturing keys.
+    main_id: Arc<Mutex<Option<HotkeyId>>>,
     running: Option<Arc<AtomicBool>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -566,12 +569,16 @@ impl HotkeyService {
             .register(hotkey)
             .map_err(|error| format!("That shortcut could not be registered: {error}"))?;
 
+        // The id of the dictation shortcut changes when the user picks another
+        // one, so the reader thread looks it up instead of capturing it.
+        let main_id = Arc::new(Mutex::new(Some(main_id)));
         let manager = Arc::new(Mutex::new(manager));
         let cancel_id = Arc::new(Mutex::new(None::<HotkeyId>));
         let running = Arc::new(AtomicBool::new(true));
         let flag = running.clone();
         let thread_manager = manager.clone();
         let thread_cancel = cancel_id.clone();
+        let thread_main = main_id.clone();
         let thread = std::thread::spawn(move || {
             while flag.load(Ordering::SeqCst) {
                 let event = {
@@ -581,9 +588,10 @@ impl HotkeyService {
                 if let Some(event) = event {
                     if event.state == HotkeyState::Pressed {
                         let cancel = *thread_cancel.lock().unwrap();
+                        let main = *thread_main.lock().unwrap();
                         if Some(event.id) == cancel {
                             let _ = tx.send(HotkeySignal::Cancel);
-                        } else if event.id == main_id {
+                        } else if Some(event.id) == main {
                             let _ = tx.send(HotkeySignal::Toggle);
                         }
                     }
@@ -596,9 +604,52 @@ impl HotkeyService {
         Ok(HotkeyService {
             manager,
             cancel_id,
+            main_id,
             running: Some(running),
             thread: Some(thread),
         })
+    }
+
+    /// Points the running listener at a different dictation shortcut.
+    ///
+    /// The manager and its low-level hook are kept for the whole run and only
+    /// the registration is swapped. Rebuilding them instead — which is what
+    /// this used to do on every shortcut change — leaves Windows delivering
+    /// nothing to the replacement hook, so the setup screen's "press it once
+    /// more" test waited fifteen seconds for a key that could never arrive.
+    pub fn set_hotkey(&self, hotkey: &str) -> Result<(), String> {
+        let hotkey = handy_hotkey(hotkey)?;
+        // Lock order everywhere is main_id, then manager.
+        let mut main_id = self.main_id.lock().unwrap();
+        let manager = self.manager.lock().unwrap();
+        if main_id.and_then(|id| manager.get_hotkey(id)) == Some(hotkey) {
+            return Ok(());
+        }
+        let id = manager
+            .register(hotkey)
+            .map_err(|error| format!("That shortcut could not be registered: {error}"))?;
+        // Unregister the old one only once the new one is in place, so a
+        // rejected shortcut never leaves the app without a working hotkey.
+        if let Some(previous) = main_id.replace(id) {
+            let _ = manager.unregister(previous);
+        }
+        Ok(())
+    }
+
+    /// Stops reporting the dictation shortcut without closing the listener.
+    ///
+    /// The setup screen needs the shortcut to reach the window instead of
+    /// toggling a recording, and it used to get that by stopping the whole
+    /// service — which is what left the replacement hook deaf.
+    pub fn pause(&self) {
+        let mut main_id = self.main_id.lock().unwrap();
+        if let Some(id) = main_id.take() {
+            let _ = self.manager.lock().unwrap().unregister(id);
+        }
+    }
+
+    pub fn is_registered(&self) -> bool {
+        self.main_id.lock().unwrap().is_some()
     }
 
     /// Listen for Escape while a recording runs. Escape is only registered for

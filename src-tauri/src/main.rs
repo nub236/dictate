@@ -567,7 +567,25 @@ fn ensure_hotkey(app: &AppHandle) {
     }
     let state = app.state::<AppState>();
     let mut guard = state.hotkey_service.lock().unwrap();
-    if guard.is_some() {
+    if let Some(service) = guard.as_ref() {
+        // The listener is installed for the whole run; only the registration
+        // can be missing, because pausing the setup screen removes it. Nothing
+        // is torn down and rebuilt here: on Windows a rebuilt keyboard hook
+        // stopped receiving keys after the setup screen had used it.
+        if service.is_registered() {
+            return;
+        }
+        let hotkey = state.config.lock().unwrap().hotkey.clone();
+        match service.set_hotkey(&hotkey) {
+            Ok(()) => {
+                debug_log(&format!("hotkey: armed ({hotkey})"));
+                *state.hotkey_error.lock().unwrap() = None;
+            }
+            Err(message) => {
+                debug_log(&format!("hotkey: FAILED to arm ({hotkey}): {message}"));
+                *state.hotkey_error.lock().unwrap() = Some(message);
+            }
+        }
         return;
     }
     // Re-check after taking the lock: a pause may have landed while we waited.
@@ -603,8 +621,6 @@ fn stop_hotkey(app: &AppHandle) {
 
 fn restart_hotkey(app: &AppHandle) {
     HOTKEY_PAUSED.store(false, Ordering::SeqCst);
-    stop_hotkey(app);
-    std::thread::sleep(std::time::Duration::from_millis(120));
     ensure_hotkey(app);
 }
 
@@ -830,7 +846,14 @@ fn set_testing(value: bool) {
 fn pause_hotkey(app: AppHandle) {
     debug_log("hotkey: paused for the setup screen");
     HOTKEY_PAUSED.store(true, Ordering::SeqCst);
-    stop_hotkey(&app);
+    // Unregister the shortcut but keep the listener: the setup screen needs
+    // the keys to reach the window, and rebuilding the listener afterwards is
+    // what left it deaf.
+    let state = app.state::<AppState>();
+    let guard = state.hotkey_service.lock().unwrap();
+    if let Some(service) = guard.as_ref() {
+        service.pause();
+    }
 }
 
 #[tauri::command]
@@ -1002,7 +1025,26 @@ fn set_hotkey(app: AppHandle, hotkey: String) -> Result<Value, String> {
         config.hotkey = hotkey.clone();
         save_config(&state.dir, &config);
     }
-    restart_hotkey(&app);
+    HOTKEY_PAUSED.store(false, Ordering::SeqCst);
+    // Swap the registration on the listener that is already running instead of
+    // restarting it, so the shortcut the setup screen is about to ask the user
+    // to press is the same hook that just captured the key they chose.
+    let swapped = {
+        let service = state.hotkey_service.lock().unwrap();
+        match service.as_ref() {
+            Some(service) => {
+                service.set_hotkey(&hotkey)?;
+                true
+            }
+            None => false,
+        }
+    };
+    if swapped {
+        debug_log(&format!("hotkey: armed ({hotkey})"));
+        *state.hotkey_error.lock().unwrap() = None;
+    } else {
+        ensure_hotkey(&app);
+    }
     let running = app
         .state::<AppState>()
         .hotkey_service
