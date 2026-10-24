@@ -438,9 +438,11 @@ button.ghost:hover { background: var(--panel); }
 .toast {
   position: fixed;
   left: 50%;
-  /* Clears the button row: the footer sits 16pt off the bottom and its buttons
-     are ~28pt tall, so anything below this lands on Back/Continue. */
-  bottom: 52px;
+  /* Clear of the button row, with air under it: the footer sits 16px off the
+     bottom and its buttons are 28px tall, so its top edge is at 44px. Landing
+     the toast 40px above that floats it in the empty band above the buttons
+     instead of hugging them. */
+  bottom: 84px;
   transform: translateX(-50%);
   /* Without this a fixed element sized by "left: 50%" is capped at half the
      window and wraps: a 2-line toast twice as tall as it needs to be. */

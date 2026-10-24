@@ -20,9 +20,8 @@ let bareTimer = null;
 let permissionsPrompted = false;
 let permissionPoll = null;
 let signinPoll = null;
-let signInReturn = "permissions";
-// True only while a browser sign-in is actually running. Without this the
-// account screen's poll sees an existing session and jumps forward on its own.
+// True only while a browser sign-in is actually running, so a session found
+// after the user has moved on is not mistaken for this flow finishing.
 let signInInFlight = false;
 // Set by the capture box; lets the Rust listener feed bare modifier presses in.
 let injectBare = null;
@@ -205,8 +204,7 @@ function renderSignin() {
   $("btn-signin-back").hidden = app.onboarded;
 }
 
-async function beginSignIn(returnView) {
-  signInReturn = returnView;
+async function beginSignIn() {
   signInInFlight = true;
   const button = $("btn-signin");
   button.disabled = true;
@@ -234,9 +232,11 @@ function startSigninPolling() {
         signInInFlight = false;
         app.signed_in = true;
         app.email = status.email || app.email;
+        // Stay put rather than moving on: the email is the only place the
+        // account being used is visible, and the same completion also happens
+        // when Settings signs in, where the next setup screen is not wanted.
         renderSignin();
         $("btn-signin").disabled = false;
-        show(signInReturn);
       }
     } catch { /* keep waiting */ }
   }, 700);
@@ -810,7 +810,7 @@ function wire() {
 
   $("btn-signin").addEventListener("click", () => {
     if (app.signed_in) show(afterSignIn());
-    else beginSignIn(afterSignIn());
+    else beginSignIn();
   });
   $("btn-signin-back").addEventListener("click", () => show("welcome"));
   $("btn-signout").addEventListener("click", async () => {
@@ -935,7 +935,6 @@ function wire() {
       app.signed_in = true;
       app.email = payload.email || app.email;
       renderSignin();
-      if (currentView === "signin") show(signInReturn);
     } else {
       renderSignin();
       toast(payload.message ? String(payload.message).split("\n")[0] : "Sign-in failed");
