@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,23 @@ const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const SCOPES: &str = "openid profile email offline_access";
 const CALLBACK_PORT: u16 = 1455;
 const CALLBACK_PATH: &str = "/auth/callback";
+
+/// The authorize URL of the sign-in that is waiting for its callback.
+///
+/// Closing the browser tab is a normal thing to do and nothing tells the app it
+/// happened, so the URL is kept for the length of the attempt and can be opened
+/// again. Clearing it is what makes the screen stop offering that.
+static PENDING_URL: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn pending_url() -> Option<String> {
+    PENDING_URL.lock().ok().and_then(|url| url.clone())
+}
+
+pub fn clear_pending_url() {
+    if let Ok(mut url) = PENDING_URL.lock() {
+        *url = None;
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Credentials {
@@ -320,6 +338,9 @@ pub fn login(path: &Path) -> Result<Credentials, String> {
         scope = SCOPES.replace(' ', "%20"),
     );
     let url = format!("{AUTH_URL}?{query}");
+    if let Ok(mut pending) = PENDING_URL.lock() {
+        *pending = Some(url.clone());
+    }
     let _ = open::that(&url);
 
     let deadline = Instant::now() + Duration::from_secs(300);

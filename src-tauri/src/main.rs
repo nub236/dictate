@@ -897,7 +897,11 @@ fn sign_out(app: AppHandle) -> Value {
 fn sign_in(app: AppHandle) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        match auth::login(&state.auth_file) {
+        let result = auth::login(&state.auth_file);
+        // The attempt is over however it ended, so there is no longer a tab that
+        // could complete it.
+        auth::clear_pending_url();
+        match result {
             Ok(_) => {
                 HOTKEY_PAUSED.store(false, Ordering::SeqCst);
                 ensure_hotkey(&app);
@@ -974,7 +978,34 @@ fn auth_status(app: AppHandle) -> Value {
     json!({
         "signed_in": credentials.is_some(),
         "email": credentials.as_ref().and_then(|c| c.email()),
+        "pending": auth::pending_url().is_some(),
     })
+}
+
+/// Opens the browser tab for a sign-in that is still waiting.
+///
+/// The tab can be closed at any point and the app cannot see that, so it holds
+/// the authorize URL for the length of the attempt and reopens it on request.
+/// The URL carries the same state and PKCE challenge, so approving in the new
+/// tab completes the sign-in that is already running.
+#[tauri::command]
+fn reopen_sign_in() -> Value {
+    match auth::pending_url() {
+        Some(url) => match open::that(&url) {
+            Ok(()) => {
+                debug_log("sign-in: reopened the browser");
+                json!({ "ok": true })
+            }
+            Err(error) => {
+                debug_log(&format!("sign-in: could not reopen the browser: {error}"));
+                json!({ "ok": false })
+            }
+        },
+        None => {
+            debug_log("sign-in: no attempt is waiting for a callback");
+            json!({ "ok": false })
+        }
+    }
 }#[tauri::command]
 fn request_mic_access(_app: AppHandle) -> Value {
     // Deliberately no tccutil reset here. TCC caches a decision for the life of
@@ -1195,6 +1226,7 @@ fn main() {
             set_snippets,
             sign_in,
             sign_out,
+            reopen_sign_in,
             auth_status,
             check_permissions,
             request_mic_access,

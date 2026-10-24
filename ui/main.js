@@ -96,7 +96,6 @@ function show(view) {
   if (view === "welcome" && app.onboarded) view = "signin";
   // Nothing to grant on Windows or Linux, so nothing to show there.
   if (view === "permissions" && !needsPermissions()) view = "hotkey";
-  if (currentView !== view) signInInFlight = false;
   if (currentView === "hotkey" && view !== "hotkey") {
     invoke("resume_hotkey").catch(() => {});
     invoke("stop_capture").catch(() => {});
@@ -136,6 +135,9 @@ function show(view) {
 
   if (view === "signin") {
     renderSignin();
+    // A sign-in started before this window was hidden is still holding the
+    // callback port, so the screen follows the backend rather than this session.
+    refreshSigninState();
   }
 
   if (view === "keywords") {
@@ -187,17 +189,30 @@ function toast(message) {
 /* ------------------------------------------------------------------- sign in */
 
 function renderSignin() {
+  // While an attempt is waiting, Continue keeps its label and its place so this
+  // screen still reads like every other one. It is disabled because a second
+  // attempt would collide on the callback port; the recovery action sits next to
+  // it instead of replacing it.
+  const waiting = !app.signed_in && signInInFlight;
   $("signin-heading").textContent = app.signed_in ? "ChatGPT account" : "Sign in with ChatGPT";
   $("signin-title").textContent = app.signed_in ? (app.email || "ChatGPT account") : "Not signed in";
   // The email and the presence of Sign out already say "signed in"; the subline
   // only earns its space before that.
   $("signin-sub").hidden = app.signed_in;
-  $("signin-sub").textContent = "You'll finish in your browser";
+  $("signin-sub").textContent = waiting ? "Waiting for approval" : "You'll finish in your browser";
   $("signin-hint-a").textContent = app.signed_in
     ? "Sign out to use a different account."
-    : "A browser window opens.";
-  $("signin-hint-b").textContent = app.signed_in ? "" : "Approve there, then come back.";
+    : waiting
+      ? "Approve in the browser tab."
+      : "A browser window opens.";
+  $("signin-hint-b").textContent = app.signed_in
+    ? ""
+    : waiting
+      ? "Closed it? Open it again."
+      : "Approve there, then come back.";
   $("btn-signin").textContent = app.signed_in ? "Continue" : "Continue with ChatGPT";
+  $("btn-signin").disabled = waiting;
+  $("btn-signin-reopen").hidden = !waiting;
   $("btn-signout").hidden = !app.signed_in;
   // The account screen is where the post-setup chain starts, so Back would only
   // lead to the tour it no longer includes.
@@ -206,17 +221,44 @@ function renderSignin() {
 
 async function beginSignIn() {
   signInInFlight = true;
-  const button = $("btn-signin");
-  button.disabled = true;
-  button.textContent = "Waiting for browser…";
-  $("signin-hint-a").textContent = "Approve in the browser, then come back.";
-  $("signin-hint-b").textContent = "This window updates itself.";
+  renderSignin();
   startSigninPolling();
   try {
     await invoke("sign_in");
   } catch (error) {
-    button.disabled = false;
+    signInInFlight = false;
     renderSignin();
+    toast(String(error));
+  }
+}
+
+// The backend owns whether an attempt is still open. Reading it back keeps a
+// hidden-then-shown window from forgetting a sign-in that still holds the port.
+async function refreshSigninState() {
+  try {
+    const status = await invoke("auth_status");
+    if (!status) return;
+    if (status.signed_in) {
+      signInInFlight = false;
+      stopSigninPolling();
+      app.signed_in = true;
+      app.email = status.email || app.email;
+    } else {
+      signInInFlight = Boolean(status.pending);
+    }
+    if (currentView === "signin") renderSignin();
+  } catch { /* leave the screen as it stands */ }
+}
+
+// Opens the same authorize URL again. The state and PKCE challenge are still
+// valid, so approving in the new tab finishes the attempt already in flight.
+async function reopenSignIn() {
+  try {
+    const result = await invoke("reopen_sign_in");
+    if (result && result.ok) return;
+    // Nothing is waiting: the attempt ended while this window was away.
+    await refreshSigninState();
+  } catch (error) {
     toast(String(error));
   }
 }
@@ -810,9 +852,11 @@ function wire() {
 
   $("btn-signin").addEventListener("click", () => {
     if (app.signed_in) show(afterSignIn());
+    else if (signInInFlight) reopenSignIn();
     else beginSignIn();
   });
   $("btn-signin-back").addEventListener("click", () => show("welcome"));
+  $("btn-signin-reopen").addEventListener("click", reopenSignIn);
   $("btn-signout").addEventListener("click", async () => {
     const button = $("btn-signout");
     button.disabled = true;
@@ -936,6 +980,8 @@ function wire() {
       app.email = payload.email || app.email;
       renderSignin();
     } else {
+      stopSigninPolling();
+      signInInFlight = false;
       renderSignin();
       toast(payload.message ? String(payload.message).split("\n")[0] : "Sign-in failed");
     }
