@@ -1,145 +1,75 @@
 # Dictate
 
-Press a key, talk, press it again — your words appear wherever your cursor is, transcribed by
-ChatGPT using your own account.
+Press a hotkey, talk, press it again. Your words show up wherever your cursor is.
 
-No API key, no per-word credits, no extra subscription. If you already pay for ChatGPT, Dictate uses
-that plan. It's a small native app: a tray/menu-bar icon, a global hotkey, a microphone, and a local
-UI for settings.
+Dictate transcribes with your existing ChatGPT account. No API key, no per-word credits, no extra subscription. It's a small native app: a tray icon, a global hotkey, and a local settings window.
 
----
+## How it works
 
-## What it does
+1. Press your shortcut in any app.
+2. A pill at the bottom of the screen shows bars moving with your voice. If the meter is flat, the mic isn't hearing you.
+3. Press the shortcut again. The audio goes to ChatGPT and the text comes back.
+4. Dictate pastes the text at your cursor, then restores your previous clipboard (unless you copied something else in the meantime).
 
-1. You press your dictation shortcut anywhere — in a browser, an editor, a chat box, a form.
-2. A small pill at the bottom of the screen shows four bars moving with your voice, so you can tell
-   the microphone is actually hearing you. A flat meter means it isn't.
-3. Press the shortcut again to stop. The audio is sent to ChatGPT, which returns the text; the pill
-   drops the bars entirely and pulses a highlight across while that is happening.
-4. Dictate copies that text to the clipboard, pastes it at your cursor, and puts your old clipboard
-   contents back a moment later (unless you copied something else in the meantime).
+Press **Escape** while recording to discard the audio. Errors show up as a short amber message near the bottom of the screen.
 
-Press **Escape** while recording to throw the audio away instead of transcribing it. Errors — a
-blocked microphone, an empty recording, a failed upload — appear as a short amber message near the
-bottom of the screen.
+The mic is only open between the two presses.
 
-Nothing runs in the background while idle beyond the hotkey listener; the microphone is open only
-between the two presses.
+## Signing in
 
----
+Click **Continue with ChatGPT** and approve the request in your browser. Dictate catches the redirect on `localhost:1455`, stores the tokens, and refreshes them as needed. **Sign out** deletes them.
 
-## Signing in with ChatGPT
+It requests `openid profile email offline_access` and nothing more.
 
-Dictate doesn't ship a server and doesn't ask for an API key. It signs in through ChatGPT's own
-browser flow:
+## Privacy
 
-- Click **Continue with ChatGPT**. Your browser opens to `auth.openai.com`.
-- Approve the request there. Dictate is waiting on `http://localhost:1455/auth/callback` — a tiny
-  listener on your own machine that catches the redirect and closes.
-- The app stores the resulting tokens and refreshes them automatically as they expire.
+- Dictate never reads your chats, projects, memory, files, or billing. The only thing it keeps from your account is your email, to show which account is signed in.
+- No analytics, telemetry, or crash reporting. The app talks to two hosts: `auth.openai.com` (sign-in) and `chatgpt.com/backend-api/transcribe` (transcription).
+- Each dictation uploads one audio file plus your auth token. The recording is deleted from your disk right after, whether or not it worked.
+- **Your audio is subject to your ChatGPT data settings.** If "Improve the model for everyone" is turned on in ChatGPT, OpenAI may train on the audio you upload. To opt out, turn it off under ChatGPT → Settings → Data controls.
+- Everything else is local. Settings and history never leave your machine.
 
-It requests only `openid profile email offline_access`: enough to know who you are, keep you signed
-in, and call the transcription endpoint. Your ChatGPT email is shown on the sign-in screen so you can
-tell which account you used. **Sign out** deletes the stored tokens.
+## Keywords
 
-### What Dictate does *not* do with your account
+For words that come back wrong: product names, surnames, jargon. Add `Ghostty` and "ghosty" or "ghost tea" becomes `Ghostty`. Matching is phonetic (Double Metaphone) plus edit distance, and capitalization is preserved. It runs locally and isn't sent to ChatGPT.
 
-This matters, so plainly:
-
-- It does **not** read your conversations, chats, projects, memory, custom instructions, files, or
-  billing details. There is no code that calls any of those APIs.
-- Beyond signing in and transcribing, Dictate makes no requests against your account — no reading,
-  listing, or writing anything that belongs to it. The only account detail it keeps is the email
-  address from the token, and only to show you which account is signed in.
-- No analytics, telemetry, crash reporting, or "usage" pings. The app talks to two hosts, ever:
-  `auth.openai.com` to sign in and `chatgpt.com/backend-api/transcribe` to transcribe.
-- Nothing is synced to a service of ours. There is no "ours" — settings and history are local files.
-
-The only things sent over the network are: the OAuth request when you sign in, and the audio file for
-each dictation you finish (plus the token that identifies your account). Recordings are deleted from
-disk immediately after transcription, whether it succeeded or not.
-
----
-
-## Keyword corrections
-
-Some words come back wrong — product names, unusual spellings, surnames, jargon. **Keywords** is the
-fix-list for those.
-
-Dictate compares what ChatGPT returned against your list using phonetics (Double Metaphone) and edit
-distance, so a near-miss gets corrected without you typing every wrong spelling. Add
-`Ghostty`, and "ghosty" or "ghost tea" becomes `Ghostty`. It also preserves your capitalization:
-shout a transcript and the correction is shouted too.
-
-This runs locally, in the app, in milliseconds. It is *not* sent to ChatGPT as a hint.
-
-Use it for the obscure stuff. Common words that ChatGPT already handles don't need an entry, and a
-keyword that resembles a normal word can cause false corrections — a keyword is a magnet for similar
-sounding text.
+Keep it to obscure terms. A keyword that resembles a common word will cause false corrections.
 
 ## Snippets
 
-The opposite of keywords. Say a short phrase, get something longer out: an email address, a signature,
-a block of boilerplate.
+Say a short phrase, get longer text out: an email address, a signature, boilerplate.
 
-- Matching is exact (case-insensitive, whole words), not fuzzy — a snippet replaces text that was
-  *never said*, so a loose match would rewrite ordinary sentences.
+- Matching is exact, case-insensitive, whole words.
 - Commas separate alternatives: `my email, my address` → `you@example.com`.
-- An empty **Replace with** field deletes the phrase. Handy for filler: `um, uh, you know` → nothing.
-- Longest trigger wins, and one pass only, so a replacement is never re-expanded and a trigger inside
-  its own replacement can't loop.
+- Leave **Replace with** empty to delete the phrase (e.g. `um, uh, you know`).
+- Longest trigger wins. One pass only, so replacements are never re-expanded.
 
 ## History
 
-The last ten dictations are kept in a local `history.json`. The tray menu shows the five most recent:
-click one to copy it. **Clear History** erases the file's contents.
-
----
+The last ten dictations are saved locally. The tray menu shows the five most recent; click one to copy it. **Clear History** wipes them.
 
 ## Menu bar
 
-| Item | What it does |
-| --- | --- |
-| **History** | Recent transcripts, click to copy; clear all |
-| **Keywords** | Edit the correction list |
-| **Snippets** | Edit phrase replacements |
-| **Settings** | Hotkey, account, permissions |
-| **Quit Dictate** | Quit — the hotkey stops with it |
+Dictate lives in the tray. There's no Dock icon. The menu has History, Keywords, Snippets, Settings, and Quit.
 
-The main window is just for setup and settings. Dictate lives in the tray: it has no Dock icon and
-no entry in the app switcher, so the menu bar icon is how you reach it. Opening a screen from that
-menu brings the window to the front as usual.
-
-Dictate adds itself to your login items on first run, so the hotkey is live after a restart without
-opening the app. There is no in-app switch for this — macOS announces the new login item itself, and
-**System Settings → General → Login Items** is where you turn it off.
-
----
+It adds itself to your login items on first run so the hotkey works after a restart. To turn that off, use **System Settings → General → Login Items**.
 
 ## Requirements
 
-- macOS 11 or newer (Windows and Linux builds are possible; see below)
-- A ChatGPT account with access to transcription
-- An internet connection for each dictation
-- A microphone
+- macOS 11+ or Windows (Linux isn't packaged, but you can [build from source](#building))
+- A ChatGPT account (the free tier works)
+- A microphone and an internet connection
 
-On macOS the app needs two permissions, and setup walks you through both:
+On macOS, setup asks for two permissions:
 
-- **Microphone** — to record you. Requested properly through AVFoundation, so the system prompt
-  appears; a previous "Don't Allow" is reset only for this app so it can ask again.
-- **Accessibility** — for the global hotkey and for sending the paste keystroke.
+- **Microphone**, to record.
+- **Accessibility**, for the global hotkey and the paste keystroke.
 
-Neither is used for anything else. Dictate does no screen recording. Its keyboard listener only ever
-looks for your shortcut (and Escape while recording) — it never records what you type. On disk it
-touches its own data folder plus the temporary files described below.
-
----
+The keyboard listener only watches for your shortcut (and Escape while recording). It never records what you type. Dictate does no screen recording.
 
 ## Data on disk
 
-Everything of yours lives in one folder:
-
-| OS | Path |
+| OS | Folder |
 | --- | --- |
 | macOS | `~/Library/Application Support/dev.dictate/` |
 | Windows | `%APPDATA%\dev.dictate\` |
@@ -147,66 +77,45 @@ Everything of yours lives in one folder:
 
 | File | Contents |
 | --- | --- |
-| `config.json` | Hotkey, setup-complete flag, keywords, snippets, open-at-login flag |
-| `auth.json` | ChatGPT tokens (created `0600`, readable only by you) |
-| `history.json` | Recent transcripts and their timestamps |
-| `debug.log` | Diagnostic lines, trimmed once it passes 200 KB |
+| `config.json` | Hotkey, keywords, snippets, settings |
+| `auth.json` | ChatGPT tokens (`0600`) |
+| `history.json` | Recent transcripts |
+| `debug.log` | Diagnostics, trimmed past 200 KB |
 
-Audio is written to the system temp folder as `dictate-<nanos>.wav` and removed right after the
-upload. Nothing keeps your recordings. There is no database. One extra diagnostic mirror lives at
-`/tmp/dictate-debug.log` (macOS/Linux) so logs exist before the data folder is created; it is plain
-text and can be deleted at any time.
+Audio is written to your temp folder as `dictate-<nanos>.wav` and removed after upload. On macOS and Linux, a diagnostic copy of the log also goes to `/tmp/dictate-debug.log`; it's safe to delete.
 
----
+## Building
 
-## Building from source
-
-Prerequisites: [Node.js](https://nodejs.org), the [Rust toolchain](https://rustup.rs), and the
-platform toolchain for Tauri 2 (Xcode command line tools on macOS, MSVC + WebView2 on Windows).
+You'll need [Node.js](https://nodejs.org), the [Rust toolchain](https://rustup.rs), and the Tauri 2 platform prerequisites (Xcode command line tools on macOS, MSVC + WebView2 on Windows, the usual WebKitGTK packages on Linux).
 
 ```bash
 npm install
-npm run dev     # run with hot reload
-npm run build   # produce a signed/bundled app
+npm run dev     # hot reload
+npm run build   # bundled app
 ```
 
-The frontend is plain HTML/CSS/JS in `ui/`, loaded directly — no bundler, no framework. The Rust side
-is in `src-tauri/src/`:
+The frontend is plain HTML/CSS/JS in `ui/`, with no bundler. The Rust side lives in `src-tauri/src/`:
 
 | File | Role |
 | --- | --- |
-| `main.rs` | App state, tray menu, setup flow, the dictation pipeline |
-| `engine.rs` | Microphone capture, hotkey listener, transcription request, paste, permissions |
-| `auth.rs` | ChatGPT OAuth: login, token storage, refresh |
-| `keywords.rs` | Phonetic/Levenshtein correction of names and terms |
-| `snippets.rs` | Exact whole-word phrase replacement |
+| `main.rs` | App state, tray, setup flow, dictation pipeline |
+| `engine.rs` | Mic capture, hotkey, transcription request, paste, permissions |
+| `auth.rs` | ChatGPT OAuth and token refresh |
+| `keywords.rs` | Phonetic/Levenshtein correction |
+| `snippets.rs` | Whole-word phrase replacement |
 
-Bundle targets are set in `src-tauri/tauri.conf.json` under `bundle.targets` — `["app"]` for macOS.
-Windows overrides that in `src-tauri/tauri.windows.conf.json`, which builds only an NSIS installer
-and installs per user, so no Administrator password is needed. macOS builds use the signing identity
-and entitlements named in the same file; both are ignored on other platforms.
-
----
+Bundle targets are set in `src-tauri/tauri.conf.json` (`["app"]` on macOS). Windows overrides this in `tauri.windows.conf.json` and builds a per-user NSIS installer, so no admin password is needed.
 
 ## Troubleshooting
 
-**The hotkey does nothing.** Check the Accessibility permission, then reopen Settings → permissions
-and press *Check again*. If another app owns the shortcut, choose a different one in Settings. The
-app writes what it tried into `debug.log`.
+**Hotkey does nothing.** Check the Accessibility permission, then use *Check again* in Settings. If another app owns the shortcut, pick a different one. `debug.log` shows what was tried.
 
-**"No sound was captured."** The microphone permission is off, the input device is muted, or the
-wrong device is selected. Fix it in system settings and dictate again.
+**"No sound was captured."** The mic permission is off, the input is muted, or the wrong device is selected.
 
-**Text stops appearing after a while.** The ChatGPT session expired. Sign out and back in from
-Settings; refreshing normally handles it, but a revoked session can't be refreshed.
+**Text stops appearing.** Your ChatGPT session probably expired. Sign out and back in from Settings.
 
-**A word keeps coming back wrong.** Add it to Keywords. If your keyword is a common word, a
-more distinctive spelling of what you actually say will match better.
+**A word keeps coming back wrong.** Add it to Keywords. If it's a common word, try a more distinctive spelling of how you say it.
 
----
+## Disclaimer
 
-## A note on what this is
-
-Dictate is not an official OpenAI app, and it doesn't use a documented public API — it signs in with
-the ChatGPT OAuth flow and calls the transcription endpoint the ChatGPT clients use. That can change
-without notice. It's built for personal, local use: your account, your machine, your files.
+Dictate is not an official OpenAI app. It signs in through the ChatGPT OAuth flow and calls the transcription endpoint the ChatGPT clients use. That endpoint isn't a documented public API and could change without notice. It's built for personal use: your account, your machine, your files.
