@@ -90,19 +90,15 @@ h1 {
   color: var(--muted);
 }
 
-/* Helper text breaks at its sentences rather than wherever the box runs out:
-   at 400pt wide the system font fits roughly 55 characters, which is just
-   short of these strings, leaving two or three words alone on a line. An
-   empty span is display:block with no height, so a variant with only one
-   sentence leaves no gap. */
+/* Helper text breaks at its sentences rather than wherever the box runs out.
+   Whether a pair of sentences fits on one line depends on the font, and the
+   font is the machine's: leaving it to the browser means the same text wraps
+   differently on Windows, macOS and Linux, and often strands two or three
+   words alone on the second line. One sentence per line is the same layout
+   everywhere. An empty span is display:block with no height, so a variant
+   with only one sentence leaves no gap. */
 .lede > span,
 .hint > span { display: block; }
-
-/* The account hint's two sentences fit on one line in the Windows and Linux
-   fonts at this window's width; macOS runs wider and keeps the break at the
-   sentence. */
-body[data-platform="windows"] #signin-hint > span,
-body[data-platform="linux"] #signin-hint > span { display: inline; }
 
 .empty {
   margin: 0;
