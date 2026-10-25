@@ -19,12 +19,77 @@ const PHASE = [2, 1, 0, 1];
 // what turns them into fluid motion without lagging behind your voice.
 const ATTACK_MS = 50;
 const DECAY_MS = 150;
-// Room tone, fans and hard drives sit below this, so the bars stay collapsed
-// instead of twitching at nothing.
-const GATE = 0.02;
+// Microphones differ by an order of magnitude in what the same voice produces,
+// so a fixed gate and a full-scale assumption leave quiet speakers with a flat
+// meter. Instead the meter measures each recording: the room tone sets the floor
+// below which nothing counts, and the loudest recent syllable sets the top of
+// the scale, so a quiet microphone and a quiet voice are both handled.
+//
+// Room tone: drops straight to a quieter reading and creeps up toward a louder
+// one, so a fan switching on cannot pin it high, and FLOOR_MAX keeps the creep
+// from reaching speech level.
+const FLOOR_SEED = 0.004;
+const FLOOR_MIN = 0.0005;
+const FLOOR_MAX = 0.02;
+const FLOOR_RISE = 0.0015; // per event: a fraction of the distance to the level
+// A level has to clear the floor by this much before any bar moves.
+const FLOOR_GATE = 1.8;
+// Hard ceiling on the gate. Past this the meter would rather twitch on a noisy
+// room than hide a whisper, because a gate raised too high cannot be undone by
+// speaking louder.
+const GATE_MAX = 0.008;
+const GATE_MIN = 0.003;
+
+// Recent peak: rises to a louder level at once and eases back over a few
+// seconds, so a whisper after normal speech still fills the bars and a shout
+// does not leave them pinned at the top. Seeded mid-scale, so the first moments
+// of a recording are neither dead nor pegged while it learns.
+const PEAK_SEED = 0.05;
+const PEAK_FLOOR = 0.02;
+const PEAK_ATTACK = 0.35; // per event: follows a louder level within a frame or two
+const PEAK_RELEASE = 0.02; // per event: about two seconds to fall back
+// Top of the scale, as a multiple of the recent peak. Above 1 on purpose: a
+// level that holds steady sits around four fifths of the way up, so speaking up
+// still has somewhere to go instead of pinning the bars at the top.
+const HEADROOM = 1.2;
+// Gentler than a square root: quiet speech moves the bars without turning room
+// tone into jitter.
+const CURVE = 0.55;
 
 const level = new Float32Array(bars.length); // smoothed 0..1 per bar
-const history = []; // recent gated levels, newest last
+const history = []; // recent shaped levels, newest last
+
+// Learned within a recording, reset when the next one starts.
+let noiseFloor = FLOOR_SEED;
+let recentPeak = PEAK_SEED;
+
+/// Turns a raw 0..1 microphone level into 0..1 of bar height, scaled to the
+/// levels this recording actually contains.
+function shapeLevel(raw) {
+  raw = Math.min(1, Math.max(0, raw));
+
+  if (raw < noiseFloor) {
+    noiseFloor = Math.max(FLOOR_MIN, raw);
+  } else {
+    noiseFloor = Math.min(
+      FLOOR_MAX,
+      noiseFloor + (raw - noiseFloor) * FLOOR_RISE,
+    );
+  }
+
+  recentPeak += (raw - recentPeak) * (raw > recentPeak ? PEAK_ATTACK : PEAK_RELEASE);
+  recentPeak = Math.max(PEAK_FLOOR, recentPeak);
+
+  const gate = Math.min(GATE_MAX, Math.max(GATE_MIN, noiseFloor * FLOOR_GATE));
+  if (raw <= gate) return 0;
+  const top = Math.max(recentPeak * HEADROOM, gate * 2);
+  return Math.min(1, Math.pow((raw - gate) / (top - gate), CURVE));
+}
+
+function resetMeter() {
+  noiseFloor = FLOOR_SEED;
+  recentPeak = PEAK_SEED;
+}
 
 let state = "idle";
 let lastLevel = 0;
@@ -57,6 +122,7 @@ function setState(next) {
   pill.classList.toggle("show", next !== "idle");
   pill.classList.toggle("working", next === "working");
   if (next === "listening") {
+    resetMeter();
     flatten();
     if (frameHandle === null) {
       lastFrame = 0;
@@ -104,13 +170,7 @@ listen("pill", (event) => {
 listen("recording-level", (event) => {
   if (state !== "listening") return;
   lastLevel = Date.now();
-  const raw = Math.min(1, Math.max(0, Number(event.payload) || 0));
-  // Gate first, then the same curve as before, so quiet speech still shows.
-  const shaped =
-    raw <= GATE
-      ? 0
-      : Math.min(1, Math.pow((raw - GATE) / (1 - GATE), 0.45) * 1.5);
-  history.push(shaped);
+  history.push(shapeLevel(Number(event.payload) || 0));
   if (history.length > 8) history.shift();
 });
 
