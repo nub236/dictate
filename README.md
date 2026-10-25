@@ -104,7 +104,7 @@ The frontend is plain HTML/CSS/JS in `ui/`, with no bundler. The Rust side lives
 | `keywords.rs` | Phonetic/Levenshtein correction |
 | `snippets.rs` | Whole-word phrase replacement |
 
-Bundle targets are set in `src-tauri/tauri.conf.json` (`["app"]` on macOS). Windows overrides this in `tauri.windows.conf.json` and builds a per-user NSIS installer, so no admin password is needed.
+Bundle targets are set in `src-tauri/tauri.conf.json` (`["app", "dmg"]` on macOS). Windows overrides this in `tauri.windows.conf.json` and builds a per-user NSIS installer, so no admin password is needed.
 
 ## Troubleshooting
 

@@ -10,6 +10,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Increments every time the global hotkey is pressed.
 static HOTKEY_HITS: AtomicU64 = AtomicU64::new(0);
@@ -29,6 +30,11 @@ const TOAST_HEIGHT: f64 = 72.0;
 /// True while the setup screen is only testing the hotkey (so we don't record).
 static TESTING: AtomicBool = AtomicBool::new(false);
 
+/// When a toggle was last acted on. The hook and the page fallback can both see
+/// one keypress, and two toggles in a row would start and stop a recording.
+static LAST_TOGGLE: Mutex<Option<Instant>> = Mutex::new(None);
+const TOGGLE_DEBOUNCE: Duration = Duration::from_millis(250);
+
 /// True while the setup screen is capturing a new shortcut. The listener must
 /// stay stopped so the current shortcut reaches the window instead of toggling
 /// a recording, and so the accessibility watchdog does not re-arm it.
@@ -40,16 +46,9 @@ fn debug_log(message: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Also write to a fixed path so the log is readable before the app has
-    // created its data folder.
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/dictate-debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "{message}");
-    }
+    // Also write to the temp folder, so the log is readable without knowing
+    // where the app keeps its data.
+    log_to_temp(message);
     // Keep the log small: start over once it gets big.
     if let Ok(meta) = std::fs::metadata(&path) {
         if meta.len() > 200_000 {
@@ -68,6 +67,33 @@ fn debug_log(message: &str) {
             .unwrap_or(0.0);
         let _ = writeln!(file, "[{now:.3}] {message}");
     }
+}
+
+/// A copy of the log in the temp folder, for reaching it without the data
+/// directory. Windows has no shared temp path of that kind, so it is skipped
+/// there rather than writing to a `C:\tmp` that may not exist.
+#[cfg(not(target_os = "windows"))]
+fn log_to_temp(message: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("dictate-debug.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{message}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn log_to_temp(_message: &str) {}
+
+/// Writes a file by way of a temporary one and a rename.
+///
+/// `fs::write` truncates first, so a crash (or a full disk) partway through
+/// leaves a fragment behind — and a fragment of `config.json` or `auth.json`
+/// reads as "first run" or "signed out". A rename either lands whole or not at
+/// all.
+fn write_atomic(path: &PathBuf, contents: &str) -> std::io::Result<()> {
+    let temporary = path.with_extension("tmp");
+    std::fs::write(&temporary, contents)?;
+    std::fs::rename(&temporary, path)
 }
 
 use serde::{Deserialize, Serialize};
@@ -175,11 +201,12 @@ fn load_config(dir: &PathBuf) -> Config {
         .unwrap_or_default()
 }
 
-fn save_config(dir: &PathBuf, config: &Config) {
-    let _ = std::fs::create_dir_all(dir);
-    if let Ok(raw) = serde_json::to_string_pretty(config) {
-        let _ = std::fs::write(dir.join("config.json"), raw);
-    }
+fn save_config(dir: &PathBuf, config: &Config) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|error| format!("Could not save settings: {error}"))?;
+    let raw = serde_json::to_string_pretty(config)
+        .map_err(|error| format!("Could not save settings: {error}"))?;
+    write_atomic(&dir.join("config.json"), &raw)
+        .map_err(|error| format!("Could not save settings: {error}"))
 }
 
 fn load_history(dir: &PathBuf) -> Vec<Value> {
@@ -190,9 +217,11 @@ fn load_history(dir: &PathBuf) -> Vec<Value> {
 }
 
 fn save_history(dir: &PathBuf, items: &[Value]) {
-    let _ = std::fs::create_dir_all(dir);
-    if let Ok(raw) = serde_json::to_string_pretty(items) {
-        let _ = std::fs::write(dir.join("history.json"), raw);
+    let Ok(raw) = serde_json::to_string_pretty(items) else {
+        return;
+    };
+    if let Err(error) = std::fs::create_dir_all(dir).and_then(|_| write_atomic(&dir.join("history.json"), &raw)) {
+        debug_log(&format!("history: could not save ({error})"));
     }
 }
 
@@ -339,7 +368,14 @@ fn toast_with(app: &AppHandle, message: &str, error: bool) {
 /// Bottom centre of the screen that holds the menu bar, just above the Dock.
 /// The work area already has the menu bar and Dock subtracted.
 fn place_toast(app: &AppHandle, window: &tauri::WebviewWindow<Wry>) {
-    if let Ok(Some(monitor)) = app.primary_monitor() {
+    // Follow the cursor. With more than one screen the pill belongs on the one
+    // being typed on, not always the primary monitor.
+    let target = app
+        .cursor_position()
+        .ok()
+        .and_then(|point| app.monitor_from_point(point.x, point.y).ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten());
+    if let Some(monitor) = target {
         let scale = monitor.scale_factor();
         let area = monitor.work_area();
         let width = TOAST_WIDTH * scale;
@@ -678,6 +714,18 @@ fn handle_toggle(app: &AppHandle) {
         return;
     }
 
+    // The global hook and the page's keydown fallback can both report the same
+    // physical press. Acting on both would start a recording and immediately
+    // stop it, so a press that follows another this closely is the same press.
+    {
+        let mut last = LAST_TOGGLE.lock().unwrap();
+        if last.is_some_and(|at| at.elapsed() < TOGGLE_DEBOUNCE) {
+            debug_log("hotkey: ignored (duplicate press)");
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+
     if *state.busy.lock().unwrap() {
         return;
     }
@@ -703,7 +751,6 @@ fn handle_toggle(app: &AppHandle) {
             Err(message) => {
                 debug_log(&format!("recording: FAILED to start: {message}"));
                 toast_error(app, &message);
-                let _ = app.emit("engine-event", json!({"event": "error", "message": message}));
             }
         }
         return;
@@ -862,14 +909,14 @@ fn set_testing(value: bool) {
 /// The Windows keyboard hook does not deliver keys to the window that has
 /// focus, so a focused app would never start a dictation. The page sees those
 /// keys instead and asks for the toggle through here.
-#[tauri::command]
+#[tauri::command(async)]
 fn toggle_dictation(app: AppHandle) {
     handle_toggle(&app);
 }
 
 /// Cancels a recording from inside the app's own window. Escape is a second
 /// hook registration, so it is deaf in the same state the shortcut is.
-#[tauri::command]
+#[tauri::command(async)]
 fn cancel_dictation(app: AppHandle) {
     cancel_recording(&app);
 }
@@ -971,7 +1018,7 @@ fn get_keywords(app: AppHandle) -> Vec<String> {
 }
 
 #[tauri::command]
-fn set_keywords(app: AppHandle, keywords: Vec<String>) -> Vec<String> {
+fn set_keywords(app: AppHandle, keywords: Vec<String>) -> Result<Vec<String>, String> {
     let state = app.state::<AppState>();
     let mut cleaned: Vec<String> = Vec::new();
     for word in keywords {
@@ -993,10 +1040,10 @@ fn set_keywords(app: AppHandle, keywords: Vec<String>) -> Vec<String> {
     {
         let mut config = state.config.lock().unwrap();
         config.keywords = cleaned.clone();
-        save_config(&state.dir, &config);
+        save_config(&state.dir, &config)?;
     }
     debug_log(&format!("keywords: saved {} entries", cleaned.len()));
-    cleaned
+    Ok(cleaned)
 }
 
 #[tauri::command]
@@ -1005,16 +1052,19 @@ fn get_snippets(app: AppHandle) -> Vec<snippets::Snippet> {
 }
 
 #[tauri::command]
-fn set_snippets(app: AppHandle, snippets: Vec<snippets::Snippet>) -> Vec<snippets::Snippet> {
+fn set_snippets(
+    app: AppHandle,
+    snippets: Vec<snippets::Snippet>,
+) -> Result<Vec<snippets::Snippet>, String> {
     let state = app.state::<AppState>();
     let cleaned = snippets::clean(snippets);
     {
         let mut config = state.config.lock().unwrap();
         config.snippets = cleaned.clone();
-        save_config(&state.dir, &config);
+        save_config(&state.dir, &config)?;
     }
     debug_log(&format!("snippets: saved {} entries", cleaned.len()));
-    cleaned
+    Ok(cleaned)
 }
 
 #[tauri::command]
@@ -1052,8 +1102,13 @@ fn reopen_sign_in() -> Value {
             json!({ "ok": false })
         }
     }
-}#[tauri::command]
-fn request_mic_access(_app: AppHandle) -> Value {
+}
+
+#[tauri::command(async)]
+fn request_mic_access(app: AppHandle) -> Value {
+    // The waiting happens off the main thread, where it is harmless, while the
+    // AVFoundation call itself stays on the main thread exactly as it always
+    // was — a framework call is not the part that needed to move.
     // Deliberately no tccutil reset here. TCC caches a decision for the life of
     // the process, so a reset while running cannot produce a prompt: the request
     // below answers false at once. Worse, the reset deletes the row from the
@@ -1062,10 +1117,9 @@ fn request_mic_access(_app: AppHandle) -> Value {
     // Settings, so the UI sends people there instead.
 
     let (tx, rx) = mpsc::channel::<bool>();
-    // AVFoundation answers on its own queue and the system prompt is presented
-    // by tccd, so the request does not need the main thread; wait here instead
-    // of freezing the window.
-    engine::request_mic_access(tx);
+    let _ = app.run_on_main_thread(move || {
+        engine::request_mic_access(tx);
+    });
     let granted = rx
         .recv_timeout(std::time::Duration::from_secs(120))
         .unwrap_or(false);
@@ -1100,7 +1154,7 @@ fn set_hotkey(app: AppHandle, hotkey: String) -> Result<Value, String> {
     {
         let mut config = state.config.lock().unwrap();
         config.hotkey = hotkey.clone();
-        save_config(&state.dir, &config);
+        save_config(&state.dir, &config)?;
     }
     HOTKEY_PAUSED.store(false, Ordering::SeqCst);
     // Swap the registration on the listener that is already running instead of
@@ -1171,28 +1225,33 @@ fn stop_capture(app: AppHandle) {
 #[tauri::command]
 fn mark_onboarded(app: AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    {
+    let saved = {
         let mut config = state.config.lock().unwrap();
-        if !config.onboarded {
+        if config.onboarded {
+            Ok(())
+        } else {
             config.onboarded = true;
-            save_config(&state.dir, &config);
+            save_config(&state.dir, &config)
         }
-    }
-    // Not conditional on the write above: walking the setup screens again from
-    // the tray pauses the hotkey, and every exit from them has to undo that.
+    };
+    // Not conditional on the write: walking the setup screens again from the
+    // tray pauses the hotkey, and every exit from them has to undo that even
+    // when saving failed.
     HOTKEY_PAUSED.store(false, Ordering::SeqCst);
     ensure_hotkey(&app);
     refresh_tray(&app);
-    Ok(())
+    saved
 }
 
 #[tauri::command]
 fn complete_onboarding(app: AppHandle) -> Result<(), String> {
-    mark_onboarded(app.clone())?;
+    let saved = mark_onboarded(app.clone());
+    // Hide either way: a failed save is worth reporting, but leaving the setup
+    // window open in front of someone who just pressed Done is worse.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
-    Ok(())
+    saved
 }
 
 #[tauri::command]
@@ -1467,6 +1526,23 @@ mod config_tests {
         let raw = serde_json::to_string(&config).unwrap();
         let back: Config = serde_json::from_str(&raw).unwrap();
         assert_eq!(back.snippets, config.snippets);
+    }
+
+    #[test]
+    fn an_atomic_save_replaces_the_old_file_whole() {
+        // Renaming over an existing file is the part that differs between
+        // platforms, and every settings and login write goes through it.
+        let dir = std::env::temp_dir().join(format!("dictate-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, "old").unwrap();
+        write_atomic(&path, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "the temporary file was left behind"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

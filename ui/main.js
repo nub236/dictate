@@ -409,7 +409,11 @@ async function persistKeywords() {
   try {
     keywordList = await invoke("set_keywords", { keywords: keywordList });
   } catch (error) {
+    // The save failed, so the list on screen is not what is on disk. Say so and
+    // put back what the backend actually holds instead of pretending.
     toast(String(error));
+    await loadKeywords();
+    return;
   }
   renderKeywords();
 }
@@ -523,6 +527,8 @@ async function persistSnippets() {
     snippetList = await invoke("set_snippets", { snippets: snippetList });
   } catch (error) {
     toast(String(error));
+    await loadSnippets();
+    return;
   }
   renderSnippets();
 }
@@ -964,10 +970,17 @@ function wire() {
   // The Ready screen closes on an explicit click: a window that vanishes on its
   // own a few seconds in reads as a crash. This also marks setup complete, so
   // closing the window any other way leaves that for the next run.
-  $("btn-done").addEventListener("click", () => {
+  $("btn-done").addEventListener("click", async () => {
     const button = $("btn-done");
     button.disabled = true;
-    invoke("complete_onboarding").catch(() => {});
+    try {
+      await invoke("complete_onboarding");
+    } catch (error) {
+      // The window normally closes here. If it did not, say why rather than
+      // leaving a dead button on screen.
+      button.disabled = false;
+      toast(String(error));
+    }
   });
 
   attachCapture("capture", "capture-value", "capture-hint");
@@ -1038,6 +1051,9 @@ async function init() {
     const fresh = await invoke("bootstrap");
     app = { ...app, ...fresh };
   } catch { /* first run, defaults are fine */ }
+  // A menu-bar app has no console, so this is the only way to tell from the log
+  // that the page loaded and could reach the backend at all.
+  log(`ui ready (${app.platform || "unknown"})`);
   watchWindowHotkey();
   renderSignin();
   show("welcome");

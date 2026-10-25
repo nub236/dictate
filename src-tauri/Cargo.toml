@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "ChatGPT dictation, anywhere you type"
 authors = ["dictate"]
 edition = "2021"
-rust-version = "1.77"
+# `Option::is_none_or` in keywords.rs needs 1.82, so the declared minimum has to
+# match or cargo refuses a toolchain it could actually build with.
+rust-version = "1.82"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
