@@ -862,7 +862,10 @@ function wire() {
     button.disabled = true;
     try {
       await invoke("sign_out");
-      invoke("pause_hotkey").catch(() => {});
+      // Sign-out ends any attempt that was still waiting, so this screen must
+      // stop showing it as one.
+      signInInFlight = false;
+      stopSigninPolling();
       app.signed_in = false;
       app.email = null;
       renderSignin();
@@ -983,6 +986,8 @@ function wire() {
       stopSigninPolling();
       signInInFlight = false;
       renderSignin();
+      // A sign-out cancels the attempt on purpose; that is not a failure.
+      if (payload.cancelled) return;
       toast(payload.message ? String(payload.message).split("\n")[0] : "Sign-in failed");
     }
   });

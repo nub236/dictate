@@ -17,7 +17,7 @@ The mic is only open between the two presses.
 
 ## Signing in
 
-Click **Continue with ChatGPT** and approve the request in your browser. Dictate catches the redirect on `localhost:1455`, stores the tokens, and refreshes them as needed. **Sign out** deletes them.
+Click **Continue with ChatGPT** and approve the request in your browser. Dictate catches the redirect on `localhost:1455`, stores the tokens, and refreshes them as needed. **Sign out** deletes them and asks ChatGPT to revoke the refresh token; if a sign-in was still waiting for its browser tab, signing out ends it too.
 
 It requests `openid profile email offline_access` and nothing more.
 

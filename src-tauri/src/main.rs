@@ -906,7 +906,15 @@ fn bootstrap(app: AppHandle) -> Value {
 #[tauri::command]
 fn sign_out(app: AppHandle) -> Value {
     let state = app.state::<AppState>();
+    // A sign-in can still be waiting for its callback. Ending it here is what
+    // stops an approval in an already-open tab from writing the tokens back
+    // after the user has signed out, and it frees the callback port at once.
+    auth::cancel_attempt();
+    let credentials = auth::load(&state.auth_file);
     let _ = std::fs::remove_file(&state.auth_file);
+    // Off the main thread, and best effort: the local tokens are already gone.
+    std::thread::spawn(move || auth::revoke(credentials.as_ref()));
+    debug_log("sign-out: removed the stored tokens");
     json!({ "signed_in": false, "email": null })
 }
 
@@ -930,7 +938,13 @@ fn sign_in(app: AppHandle) {
                 let _ = app.emit("sign-in-finished", payload);
             }
             Err(message) => {
-                let _ = app.emit("sign-in-finished", json!({"ok": false, "message": message}));
+                // A sign-out cancels the attempt, which is not a failure the UI
+                // should report as one.
+                let cancelled = message == auth::CANCELLED_MESSAGE;
+                let _ = app.emit(
+                    "sign-in-finished",
+                    json!({ "ok": false, "message": message, "cancelled": cancelled }),
+                );
             }
         }
     });
