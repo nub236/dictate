@@ -643,6 +643,11 @@ fn set_cancel_armed(app: &AppHandle, armed: bool) {
     }
 }
 
+/// What a refused token means for the user, in the one place both paths agree.
+fn expired_message() -> String {
+    "Your ChatGPT session expired. Sign in again from the menu bar.".to_string()
+}
+
 /// Drops the recording in progress without transcribing or pasting anything.
 fn cancel_recording(app: &AppHandle) {
     let state = app.state::<AppState>();
@@ -738,11 +743,21 @@ fn handle_toggle(app: &AppHandle) {
                 let mut credentials = auth::valid(&state.auth_file)?;
                 match engine::transcribe(&path, &credentials) {
                     Ok(text) => Ok(text),
-                    Err(error) if error.contains("401") || error.contains("expired") => {
+                    // The account was refused rather than the audio. The stored
+                    // expiry can be wrong (a clock change, or a session revoked
+                    // elsewhere), so refresh once before giving up.
+                    Err(error) if error.is_auth() => {
+                        if credentials.refresh_token.is_empty() {
+                            return Err(expired_message());
+                        }
                         credentials = auth::refresh(&state.auth_file, &credentials)?;
-                        engine::transcribe(&path, &credentials)
+                        match engine::transcribe(&path, &credentials) {
+                            Ok(text) => Ok(text),
+                            Err(error) if error.is_auth() => Err(expired_message()),
+                            Err(error) => Err(error.message),
+                        }
                     }
-                    Err(error) => Err(error),
+                    Err(error) => Err(error.message),
                 }
             })();
             let _ = std::fs::remove_file(&path);

@@ -325,29 +325,77 @@ fn nanos() -> u128 {
 // transcription
 // --------------------------------------------------------------------------- //
 
-pub fn transcribe(path: &Path, credentials: &Credentials) -> Result<String, String> {
-    // One retry smooths over flaky Wi-Fi, VPN switches and the odd edge block.
-    let mut last = String::new();
-    for attempt in 0..2 {
-        match transcribe_once(path, credentials) {
-            Ok(text) => return Ok(text),
-            Err(message) => last = message,
-        }
-        if attempt == 0 {
-            std::thread::sleep(Duration::from_millis(700));
-        }
-    }
-    Err(last)
+/// Why a transcription request failed.
+pub struct TranscribeFailure {
+    /// The HTTP status, or 0 when the request never produced a response.
+    pub status: u16,
+    pub message: String,
 }
 
-fn transcribe_once(path: &Path, credentials: &Credentials) -> Result<String, String> {
-    let config = format!(
-        "header = \"Authorization: Bearer {}\"\nheader = \"chatgpt-account-id: {}\"\nheader = \"originator: {}\"\nheader = \"User-Agent: {}\"\nheader = \"Accept: application/json\"\n",
-        credentials.access_token,
-        credentials.account_id.clone().unwrap_or_default(),
+impl TranscribeFailure {
+    /// The account was refused, not the audio: only a fresh token or a new
+    /// sign-in can help, so neither a retry nor a second upload is worth it.
+    ///
+    /// Only 401 counts. A 403 on this endpoint can also mean the request was
+    /// blocked, and telling someone their session expired when it was blocked
+    /// sends them to fix something that was never broken.
+    pub fn is_auth(&self) -> bool {
+        self.status == 401
+    }
+
+    /// True for the failures that a second identical request can plausibly fix.
+    fn worth_retrying(&self) -> bool {
+        self.status == 0 || self.status >= 500
+    }
+}
+
+pub fn transcribe(path: &Path, credentials: &Credentials) -> Result<String, TranscribeFailure> {
+    // One retry smooths over flaky Wi-Fi, VPN switches and the odd edge block.
+    // A refusal is not retried: the second request would be refused the same way.
+    match transcribe_once(path, credentials) {
+        Ok(text) => Ok(text),
+        Err(error) if !error.worth_retrying() => Err(error),
+        Err(_) => {
+            std::thread::sleep(Duration::from_millis(700));
+            transcribe_once(path, credentials)
+        }
+    }
+}
+
+/// Splits curl's `-w "\n%{http_code}"` output into the body and the status.
+///
+/// A status of 0 means the request produced no response at all, which is a
+/// different problem from any answer the server could give.
+fn split_status(stdout: &str) -> (String, u16) {
+    match stdout.rsplit_once('\n') {
+        Some((body, code)) => (body.to_string(), code.trim().parse::<u16>().unwrap_or(0)),
+        None => (stdout.to_string(), 0),
+    }
+}
+
+fn transcribe_once(
+    path: &Path,
+    credentials: &Credentials,
+) -> Result<String, TranscribeFailure> {
+    let mut config = format!(
+        "header = \"Authorization: Bearer {}\"\n",
+        credentials.access_token
+    );
+    // Only send the account header when there is an account id to send: an
+    // empty value is a different header than a missing one, and the edge can
+    // reject it.
+    if let Some(account) = credentials
+        .account_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    {
+        config.push_str(&format!("header = \"chatgpt-account-id: {account}\"\n"));
+    }
+    config.push_str(&format!(
+        "header = \"originator: {}\"\nheader = \"User-Agent: {}\"\nheader = \"Accept: application/json\"\n",
         TRANSCRIBE_ORIGINATOR,
         transcribe_user_agent(),
-    );
+    ));
     let upload = format!("file=@{};type=audio/wav", path.display());
 
     // HTTP/1.1 matters: the edge blocks this endpoint when it arrives over HTTP/2.
@@ -364,30 +412,61 @@ fn transcribe_once(path: &Path, credentials: &Credentials) -> Result<String, Str
         &upload,
         "-K",
         "-",
+        // The status goes after the body, so a refusal can be told apart from a
+        // transport failure instead of being guessed at from the prose.
+        "-w",
+        "\\n%{http_code}",
     ])
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
     hide_console(&mut curl);
-    let mut child = curl
-        .spawn()
-        .map_err(|e| format!("could not reach ChatGPT: {e}"))?;
+    let mut child = curl.spawn().map_err(|e| TranscribeFailure {
+        status: 0,
+        message: format!("Could not start the upload: {e}"),
+    })?;
 
     if let Some(stdin) = child.stdin.as_mut() {
         stdin
             .write_all(config.as_bytes())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| TranscribeFailure {
+                status: 0,
+                message: format!("Could not send the request: {e}"),
+            })?;
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("transcription failed: {e}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
-        let snippet: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        let snippet: String = snippet.chars().take(160).collect();
-        format!("ChatGPT could not take that audio ({snippet})")
+    let output = child.wait_with_output().map_err(|e| TranscribeFailure {
+        status: 0,
+        message: format!("transcription failed: {e}"),
     })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let (body, status) = split_status(&stdout);
+
+    // Status 0 means curl never got a response at all. Its stderr says why, and
+    // that is a connection problem rather than a rejected sign-in.
+    if status == 0 {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TranscribeFailure {
+            status: 0,
+            message: if detail.is_empty() {
+                "Could not reach ChatGPT. Check your connection and try again.".to_string()
+            } else {
+                format!("Could not reach ChatGPT: {detail}")
+            },
+        });
+    }
+
+    let value: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            let snippet: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            let snippet: String = snippet.chars().take(160).collect();
+            return Err(TranscribeFailure {
+                status,
+                message: format!("ChatGPT could not take that audio ({status}): {snippet}"),
+            });
+        }
+    };
 
     if let Some(transcript) = value.get("text").and_then(|v| v.as_str()) {
         return Ok(transcript.trim().to_string());
@@ -397,8 +476,11 @@ fn transcribe_once(path: &Path, credentials: &Credentials) -> Result<String, Str
         .and_then(|error| error.get("message"))
         .and_then(|m| m.as_str())
         .or_else(|| value.get("detail").and_then(|d| d.as_str()))
-        .unwrap_or_else(|| text.trim());
-    Err(format!("ChatGPT could not transcribe that: {message}"))
+        .unwrap_or_else(|| body.trim());
+    Err(TranscribeFailure {
+        status,
+        message: format!("ChatGPT could not transcribe that ({status}): {message}"),
+    })
 }
 
 // --------------------------------------------------------------------------- //
@@ -847,6 +929,37 @@ mod tests {
         });
         assert_eq!(*reported.lock().unwrap(), vec![0.5, 0.9]);
         assert_eq!(sink.samples.len(), 8);
+    }
+
+    #[test]
+    fn the_status_is_taken_from_the_end_of_the_response() {
+        assert_eq!(
+            split_status("{\"text\":\"hi\"}\n200"),
+            ("{\"text\":\"hi\"}".to_string(), 200)
+        );
+        // A pretty-printed body keeps its own newlines.
+        assert_eq!(
+            split_status("{\n  \"detail\": \"Unauthorized\"\n}\n401"),
+            ("{\n  \"detail\": \"Unauthorized\"\n}".to_string(), 401)
+        );
+        // Nothing on stdout means no response was received, not a status of 0
+        // from the server.
+        assert_eq!(split_status(""), (String::new(), 0));
+        assert_eq!(split_status("garbage"), ("garbage".to_string(), 0));
+    }
+
+    #[test]
+    fn a_refused_token_is_not_retried_and_a_server_error_is() {
+        let failure = |status| TranscribeFailure {
+            status,
+            message: String::new(),
+        };
+        assert!(failure(401).is_auth());
+        assert!(!failure(403).is_auth());
+        assert!(!failure(401).worth_retrying());
+        assert!(!failure(400).worth_retrying() && !failure(400).is_auth());
+        assert!(failure(500).worth_retrying());
+        assert!(failure(0).worth_retrying() && !failure(0).is_auth());
     }
 }
 
