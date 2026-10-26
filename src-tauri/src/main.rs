@@ -679,9 +679,17 @@ fn set_cancel_armed(app: &AppHandle, armed: bool) {
     }
 }
 
+/// What the user's own platform calls the strip of icons a background app
+/// lives in: a menu bar on a Mac, a system tray everywhere else.
+const TRAY_NAME: &str = if cfg!(target_os = "macos") {
+    "menu bar"
+} else {
+    "system tray"
+};
+
 /// What a refused token means for the user, in the one place both paths agree.
 fn expired_message() -> String {
-    "Your ChatGPT session expired. Sign in again from the menu bar.".to_string()
+    format!("Your ChatGPT session expired. Sign in again from the {TRAY_NAME}.")
 }
 
 /// Drops the recording in progress without transcribing or pasting anything.
@@ -776,7 +784,10 @@ fn handle_toggle(app: &AppHandle) {
             ));
             if peak < 0.002 {
                 let _ = std::fs::remove_file(&path);
-                let message = "No sound was captured. Allow Dictate in System Settings > Privacy & Security > Microphone, and make sure your microphone is not muted.".to_string();
+                let message = format!(
+                    "No sound was captured. {}. Make sure your microphone is not muted.",
+                    engine::MIC_SETTINGS_HINT
+                );
                 debug_log(&format!("recording: {message}"));
                 toast_error(&worker, &message);
                 return Ok(());
@@ -1500,6 +1511,34 @@ mod config_tests {
         let config: Config = serde_json::from_str(raw).expect("old config must still parse");
         assert_eq!(config.keywords, vec!["Ghostty".to_string()]);
         assert!(config.snippets.is_empty());
+    }
+
+    #[test]
+    fn messages_name_the_platforms_own_furniture() {
+        // Both of these strings are shown on every platform, and a Windows user
+        // has neither a menu bar nor a System Settings pane.
+        let expired = expired_message();
+        if cfg!(target_os = "macos") {
+            assert!(expired.contains("menu bar"), "{expired}");
+        } else {
+            assert!(expired.contains("system tray"), "{expired}");
+            assert!(!expired.contains("menu bar"), "{expired}");
+        }
+
+        if !cfg!(target_os = "macos") {
+            assert!(
+                !engine::MIC_SETTINGS_HINT.contains("System Settings"),
+                "{}",
+                engine::MIC_SETTINGS_HINT
+            );
+        }
+        if cfg!(target_os = "windows") {
+            assert!(
+                engine::MIC_SETTINGS_HINT.contains("Privacy & security"),
+                "{}",
+                engine::MIC_SETTINGS_HINT
+            );
+        }
     }
 
     #[test]

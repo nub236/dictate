@@ -85,6 +85,17 @@ const MIC_HINT: &str = if cfg!(target_os = "macos") {
     " Check the microphone in your system privacy settings."
 };
 
+/// Where microphone access is turned back on, as a sentence of its own, so the
+/// messages that report a blocked microphone name a pane that exists on the
+/// platform they are shown on.
+pub const MIC_SETTINGS_HINT: &str = if cfg!(target_os = "macos") {
+    "Allow Dictate in System Settings > Privacy & Security > Microphone"
+} else if cfg!(target_os = "windows") {
+    "Turn on microphone access in Settings > Privacy & security > Microphone"
+} else {
+    "Turn on microphone access in your system's privacy settings"
+};
+
 /// "granted", "denied", "not_determined" or "unknown".
 pub fn mic_permission() -> &'static str {
     use handy_recorder::Permission;
@@ -306,7 +317,7 @@ fn mic_error_message(error: &handy_recorder::Error) -> String {
     use handy_recorder::ErrorKind;
     match error.kind() {
         ErrorKind::PermissionDenied => {
-            "Dictate is not allowed to use the microphone. Open System Settings > Privacy & Security > Microphone, turn Dictate on, then try again.".to_string()
+            format!("Dictate is not allowed to use the microphone. {MIC_SETTINGS_HINT}, then try again.")
         }
         ErrorKind::DeviceUnavailable => "No microphone was found.".to_string(),
         ErrorKind::DeviceBusy => "Another app is using the microphone.".to_string(),

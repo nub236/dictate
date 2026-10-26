@@ -59,6 +59,11 @@ function modifierNames() {
   return modifierLabels[platformName()] || modifierLabels.macos;
 }
 
+// What the platform calls the strip of icons a background app lives in.
+function trayPlace() {
+  return platformName() === "macos" ? "menu bar" : "system tray";
+}
+
 // The id names a physical key, so the label follows the platform too: the same
 // key is Right Option on a Mac and Right Alt elsewhere.
 const bareModifierNames = { option: "alt", ctrl: "ctrl", cmd: "cmd", shift: "shift" };
@@ -175,6 +180,9 @@ function show(view) {
 
   if (view === "done") {
     $("done-hotkey").textContent = prettyHotkey(pendingHotkey);
+    for (const place of document.querySelectorAll(".tray-place")) {
+      place.textContent = trayPlace();
+    }
     // Setup counts as finished the moment this screen is reached, so closing the
     // window some other way still remembers it; Done only hides the window.
     invoke("mark_onboarded").catch(() => {});
