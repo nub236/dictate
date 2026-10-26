@@ -1,0 +1,98 @@
+name: Build
+
+# Installers are cut from a tag. A manual run builds the same artifacts without
+# publishing them, which is the cheap way to find out that a change broke a
+# platform before you have a version number on it.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            artifact: dictate-windows
+            # tauri.windows.conf.json already asks for NSIS in currentUser mode,
+            # so this needs no administrator password on the target machine.
+            args: --bundles nsis
+            bundles: src-tauri/target/release/bundle/nsis/*.exe
+          - name: macOS
+            os: macos-latest
+            artifact: dictate-macos
+            # A universal DMG: the hosted runners are Apple silicon only, and a
+            # free Intel runner no longer exists, so cross-compiling both arches
+            # into one bundle is the only way an Intel Mac can run this.
+            args: --bundles dmg --target universal-apple-darwin
+            bundles: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check the browser scripts
+        run: npm run check:ui
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Add the other macOS architecture
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build
+        run: npx tauri build ${{ matrix.args }}
+        env:
+          # The bundle config names a certificate that only exists on the dev
+          # machine. Ad-hoc signing keeps the DMG buildable; downloads are
+          # unsigned until a Developer ID is wired up as a secret.
+          APPLE_SIGNING_IDENTITY: "-"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bundles }}
+          if-no-files-found: error
+
+  release:
+    name: Attach to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # The only job that writes anything outside the run.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l artifacts
+          # Both runners upload into one release, so create it once if the tag
+          # has none yet and then add to whatever is there.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "Dictate $TAG" --notes "Built from $GITHUB_SHA."
+          gh release upload "$TAG" artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
