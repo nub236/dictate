@@ -238,76 +238,15 @@ fn preview(text: &str, limit: usize) -> String {
     }
 }
 
-/// How wide one History row's text may be, in points, padding included.
+/// How much of a transcript shows in the tray's History submenu.
 ///
-/// macOS opens a submenu to the right only when it fits between the menu and the
-/// screen edge, and otherwise flips it to the left. Counting characters cannot
-/// keep that width steady — the system font is proportional, so thirty narrow
-/// letters are far narrower than thirty wide ones and the submenu crosses the
-/// threshold in both directions. Measuring in points does keep it steady, and
-/// padding to the full width makes every row identical.
-///
-/// The menu adds its own insets either side of the title — around 45 points in
-/// total at the default size — so the title is kept under the ~200pt of room to
-/// the right of the tray menu, leaving the submenu itself just inside it.
-const HISTORY_ROW_WIDTH: f64 = 160.0;
-
-/// Width of `text` drawn in the system menu font, in points.
-#[cfg(target_os = "macos")]
-fn text_width(text: &str) -> f64 {
-    use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
-    use objc2_app_kit::{NSFont, NSFontAttributeName, NSStringDrawing};
-    use objc2_foundation::{NSDictionary, NSString};
-
-    let string = NSString::from_str(text);
-    unsafe {
-        let font = NSFont::menuFontOfSize(0.0);
-        let font: &AnyObject = &*(Retained::as_ptr(&font) as *const AnyObject);
-        let attributes = NSDictionary::from_slices(&[NSFontAttributeName], &[font]);
-        string.sizeWithAttributes(Some(&attributes)).width
-    }
-}
-
-/// Width of `text` in the system menu font. Only macOS can measure for real;
-/// this build has no tray submenu to keep narrow, so an estimate will do.
-#[cfg(not(target_os = "macos"))]
-fn text_width(text: &str) -> f64 {
-    text.chars().count() as f64 * 7.0
-}
-
-/// One line of a transcript, trimmed and padded to exactly `max_width` points.
-/// Padding uses no-break spaces so AppKit cannot collapse them the way it would
-/// trailing plain spaces, and so the text never wraps.
-fn history_row(text: &str, max_width: f64) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut row = if text_width(&flat) <= max_width {
-        flat
-    } else {
-        // Longest prefix that still fits once the ellipsis is added. Width grows
-        // with every character, so binary search finds it in a handful of
-        // measurements even for a very long transcript.
-        let chars: Vec<char> = flat.chars().collect();
-        let (mut fits, mut too_long) = (0usize, chars.len());
-        while fits < too_long {
-            let mid = (fits + too_long).div_ceil(2);
-            let mut candidate: String = chars[..mid].iter().collect();
-            candidate.push('…');
-            if text_width(candidate.trim_end()) <= max_width {
-                fits = mid;
-            } else {
-                too_long = mid - 1;
-            }
-        }
-        let mut trimmed: String = chars[..fits].iter().collect();
-        trimmed.truncate(trimmed.trim_end().len());
-        format!("{trimmed}…")
-    };
-    while text_width(&row) < max_width {
-        row.push('\u{00a0}');
-    }
-    row
-}
+/// A plain character count, on every platform. Measuring the menu font would
+/// keep every row exactly as wide as the next, but the only reason to want
+/// that was to keep a macOS submenu opening on the same side every time — and
+/// losing characters to it is the worse trade. Enough text to recognise the
+/// dictation is what matters, so the rows run to `HISTORY_PREVIEW_CHARS`
+/// characters and the submenu opens wherever the screen leaves room for it.
+const HISTORY_PREVIEW_CHARS: usize = 32;
 
 // --------------------------------------------------------------------------- //
 // toast
@@ -510,17 +449,15 @@ fn hide_pill(app: &AppHandle) {
 }
 
 fn build_menu(app: &AppHandle, history: &[Value]) -> tauri::Result<Menu<Wry>> {
-    // Recent transcriptions live in a History submenu. The previews are kept
-    // short on purpose: macOS draws the submenu on whichever side has room, and
-    // a short list stays narrow enough to open to the right of a tray menu that
-    // sits at the screen edge.
+    // Recent transcriptions live in a History submenu, one line each, cut to
+    // HISTORY_PREVIEW_CHARS so a long dictation cannot make the menu unwieldy.
     let mut entries: Vec<MenuItem<Wry>> = Vec::new();
     for (index, item) in history.iter().take(5).enumerate() {
         let text = item.get("text").and_then(Value::as_str).unwrap_or("");
         entries.push(MenuItem::with_id(
             app,
             format!("h:{index}"),
-            history_row(text, HISTORY_ROW_WIDTH),
+            preview(text, HISTORY_PREVIEW_CHARS),
             true,
             None::<&str>,
         )?);
@@ -1585,23 +1522,17 @@ mod config_tests {
     }
 
     #[test]
-    fn history_rows_are_one_fixed_width() {
-        // Rows are measured, not counted, so wide letters and narrow ones have
-        // to land on the same width to the point. Padding overshoots by at most
-        // one no-break space.
-        let cases = [
-            "hi",
-            "Now try thirty.",
-            "WWW MMM iii lll",
-            "Okay, I'm gonna do a really long dictation about windows and pixels",
-        ];
-        for text in cases {
-            let row = history_row(text, HISTORY_ROW_WIDTH);
-            let width = text_width(&row);
-            assert!(
-                width >= HISTORY_ROW_WIDTH && width <= HISTORY_ROW_WIDTH + 5.0,
-                "{text:?} measured {width}"
-            );
-        }
+    fn history_previews_run_to_thirty_two_characters() {
+        // Short transcripts are left alone; long ones keep exactly the limit and
+        // pick up the ellipsis, so no row loses text to a narrow glyph.
+        assert_eq!(preview("hi", HISTORY_PREVIEW_CHARS), "hi");
+        assert_eq!(
+            preview("Perfect, that's everything I needed today", HISTORY_PREVIEW_CHARS),
+            "Perfect, that's everything I nee…"
+        );
+        assert_eq!(
+            preview("WWW MMM iii lll", HISTORY_PREVIEW_CHARS),
+            "WWW MMM iii lll"
+        );
     }
 }
