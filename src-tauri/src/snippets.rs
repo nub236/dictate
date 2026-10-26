@@ -49,46 +49,144 @@ fn at_end(haystack: &str, index: usize) -> bool {
         .is_some_and(|c| c.is_alphanumeric())
 }
 
-/// Cleanup after a deletion (`""` replacement): filler words rarely leave tidy
-/// punctuation behind, so "so, um, I think" would otherwise become
-/// "so, , I think". Collapses the doubled spaces and the orphaned punctuation.
-fn tidy_deletions(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut pending_space = false;
-    for c in text.chars() {
-        if c == ' ' {
-            pending_space = true;
-            continue;
-        }
-        if matches!(c, ',' | ';' | ':' | '.' | '!' | '?') {
-            // No space belongs before punctuation; drop a dangling comma at the
-            // very start, and never repeat the same mark twice.
-            pending_space = false;
-            if out.is_empty() {
-                continue;
-            }
-            if out.ends_with(c) {
-                continue;
-            }
-            // "I think, ." loses the comma that had nothing left to separate.
-            if matches!(c, '.' | '!' | '?')
-                && matches!(out.chars().next_back(), Some(',') | Some(';') | Some(':'))
-            {
-                out.pop();
-                if out.is_empty() {
-                    continue;
-                }
-            }
-            out.push(c);
-            continue;
-        }
-        if pending_space && !out.is_empty() {
-            out.push(' ');
-        }
-        pending_space = false;
-        out.push(c);
+/// One stretch of the output, in the order it will be pasted.
+///
+/// Keeping the replacements apart from the transcript is what makes the cleanup
+/// safe: spacing and punctuation only change where two pieces meet, so a
+/// snippet cannot rewrite text it never matched. The previous version tidied
+/// the whole transcript whenever any snippet with an empty replacement existed,
+/// which turned "Wait... what" into "Wait. what".
+#[derive(Clone, Copy)]
+enum Piece<'a> {
+    /// Verbatim transcript, never touched.
+    Kept(&'a str),
+    /// A replacement, kept exactly as the user typed it.
+    Inserted(&'a str),
+    /// Words a snippet deleted: the pieces either side have to be joined.
+    Removed { started_upper: bool },
+}
+
+fn is_mark(c: char) -> bool {
+    matches!(c, ',' | ';' | ':')
+}
+
+fn is_sentence_end(c: char) -> bool {
+    matches!(c, '.' | '!' | '?')
+}
+
+/// Marks that never take a space in front of them.
+fn closes(c: char) -> bool {
+    matches!(
+        c,
+        ',' | ';' | ':' | '.' | '!' | '?' | ')' | ']' | '}' | '"' | '\'' | '”' | '’'
+    )
+}
+
+/// Marks that never take a space after them.
+fn opens(c: char) -> bool {
+    matches!(c, '(' | '[' | '{' | '"' | '\'' | '‘' | '“' | '-' | '/')
+}
+
+fn first_char(text: &str) -> char {
+    text.chars().next().unwrap_or(' ')
+}
+
+/// Drops the leading mark and the spaces that followed it.
+fn strip_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next();
+    chars.as_str().trim_start_matches([' ', '\t']).to_string()
+}
+
+/// Gives a sentence its capital back. Only plain lowercase ASCII changes, so an
+/// email address, a camelCase word or a path is left exactly as it was.
+fn capitalise(text: &str, on: bool) -> String {
+    if !on {
+        return text.to_string();
     }
-    out.trim().to_string()
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {
+            let mut out = String::with_capacity(text.len());
+            out.push(c.to_ascii_uppercase());
+            out.push_str(chars.as_str());
+            out
+        }
+        _ => text.to_string(),
+    }
+}
+
+/// Joins the two sides of an edit, which is the only place text is cleaned up.
+///
+/// `capitalize` means the words that were removed began a sentence, so the word
+/// that now starts it needs the capital the model never wrote — it was following
+/// a filler word, not a full stop.
+fn join(left: &str, right: &str, capitalize: bool) -> String {
+    let mut head = left.trim_end_matches([' ', '\t']).to_string();
+    let tail = right.trim_start_matches([' ', '\t']);
+
+    if head.is_empty() {
+        // The transcript now starts where a deleted phrase did, and the phrase
+        // was attached to its mark: "Um, I think" must not read ", I think".
+        let mut tail = tail.to_string();
+        let mark = first_char(&tail);
+        if is_mark(mark) || is_sentence_end(mark) {
+            tail = tail
+                .trim_start_matches(mark)
+                .trim_start_matches([' ', '\t'])
+                .to_string();
+        }
+        return capitalise(&tail, capitalize);
+    }
+
+    if tail.is_empty() {
+        return head;
+    }
+
+    let last = head.chars().next_back().unwrap_or(' ');
+    let starts_sentence = is_sentence_end(last) || last == '\n';
+
+    // A comma with nothing left to separate after a full stop: deleting "Um,"
+    // from "Fine. Um, that's it." would otherwise read "Fine., that's it."
+    if starts_sentence && is_mark(first_char(tail)) {
+        return join(&head, &strip_first(tail), capitalize);
+    }
+    // "I think, ." — the mark on this side has nothing left to separate either.
+    if is_mark(last) && is_sentence_end(first_char(tail)) {
+        head.pop();
+        return join(&head, tail, capitalize);
+    }
+    // The removed words sat between two of the same mark; one will do.
+    if last == first_char(tail) && is_mark(first_char(tail)) {
+        return join(&head, &strip_first(tail), capitalize);
+    }
+
+    let tail = capitalise(tail, capitalize && starts_sentence);
+    let last = head.chars().next_back().unwrap_or(' ');
+    let first = first_char(&tail);
+    // A newline already separates the two sides, and a space after one would
+    // indent the line.
+    if first == '\n' || last == '\n' || closes(first) || opens(last) {
+        format!("{head}{tail}")
+    } else {
+        format!("{head} {tail}")
+    }
+}
+
+/// Assembles the pieces, cleaning up only where they meet.
+fn render(pieces: &[Piece<'_>]) -> String {
+    let mut out = String::new();
+    let mut capitalize = false;
+    for piece in pieces {
+        match piece {
+            Piece::Removed { started_upper } => capitalize |= *started_upper,
+            Piece::Kept(text) | Piece::Inserted(text) => {
+                out = join(&out, text, capitalize);
+                capitalize = false;
+            }
+        }
+    }
+    out.trim_end_matches([' ', '\t']).to_string()
 }
 
 /// Splits one entry's trigger field into the individual spoken phrases its
@@ -111,12 +209,8 @@ fn normalize_trigger(trigger: &str) -> String {
 /// Replaces every whole-word occurrence of each trigger with its replacement.
 pub fn apply(text: &str, snippets: &[Snippet]) -> String {
     let mut pairs: Vec<(String, &str)> = Vec::new();
-    let mut deletes = false;
     for snippet in snippets {
         for trigger in alternatives(&snippet.trigger) {
-            if snippet.replacement.is_empty() {
-                deletes = true;
-            }
             pairs.push((fold(&trigger), snippet.replacement.as_str()));
         }
     }
@@ -127,8 +221,9 @@ pub fn apply(text: &str, snippets: &[Snippet]) -> String {
     pairs.sort_by_key(|pair| std::cmp::Reverse(pair.0.len()));
 
     let haystack = fold(text);
-    let mut out = String::with_capacity(text.len());
+    let mut pieces: Vec<Piece> = Vec::new();
     let mut cursor = 0usize;
+    let mut kept_from = 0usize;
 
     while cursor < text.len() {
         let mut hit: Option<(usize, &str)> = None;
@@ -146,27 +241,41 @@ pub fn apply(text: &str, snippets: &[Snippet]) -> String {
 
         match hit {
             Some((end, replacement)) => {
-                out.push_str(replacement);
+                if kept_from < cursor {
+                    pieces.push(Piece::Kept(&text[kept_from..cursor]));
+                }
+                if replacement.is_empty() {
+                    pieces.push(Piece::Removed {
+                        started_upper: text[cursor..end]
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_uppercase),
+                    });
+                } else {
+                    pieces.push(Piece::Inserted(replacement));
+                }
                 cursor = end;
+                kept_from = end;
             }
             None => {
-                // Copy one whole character so a multi-byte scalar is never split.
+                // Step one whole character so a multi-byte scalar is never split.
                 let Some(ch) = text[cursor..].chars().next() else {
                     break;
                 };
-                out.push(ch);
                 cursor += ch.len_utf8();
             }
         }
     }
 
-    // An empty replacement (deleting filler words) can leave doubled spaces and
-    // stranded commas behind.
-    if deletes {
-        tidy_deletions(&out)
-    } else {
-        out
+    // Nothing matched: hand back the transcript byte for byte rather than a
+    // re-rendered copy of it.
+    if pieces.is_empty() {
+        return text.to_string();
     }
+    if kept_from < text.len() {
+        pieces.push(Piece::Kept(&text[kept_from..]));
+    }
+    render(&pieces)
 }
 
 /// Trims, drops unusable entries, removes case-insensitive duplicate triggers
@@ -292,7 +401,84 @@ mod tests {
     #[test]
     fn alternatives_are_trimmed_and_ignore_case() {
         let list = vec![snippet("  um ,UH,  er ", "")];
-        assert_eq!(apply("UM and Uh and er", &list), "and and");
+        // "UM" began the sentence, so the word that now starts it gets its
+        // capital back.
+        assert_eq!(apply("UM and Uh and er", &list), "And and");
+    }
+
+    #[test]
+    fn a_filler_snippet_leaves_the_rest_of_the_transcript_alone() {
+        // Cleanup used to run over the whole transcript as soon as any snippet
+        // with an empty replacement existed, so punctuation it never touched
+        // was rewritten: "Wait... what?" came back as "Wait. what?".
+        let list = vec![snippet("um", "")];
+        assert_eq!(apply("Wait... what?", &list), "Wait... what?");
+        assert_eq!(apply("No!! Really?", &list), "No!! Really?");
+        assert_eq!(apply("e.g.  this", &list), "e.g.  this");
+    }
+
+    #[test]
+    fn an_ellipsis_survives_a_deletion_next_to_it() {
+        let list = vec![snippet("um", "")];
+        assert_eq!(apply("Well, um... anyway", &list), "Well... anyway");
+    }
+
+    #[test]
+    fn deleting_a_sentence_start_restores_the_capital() {
+        let list = vec![snippet("I mean, I guess", "")];
+        assert_eq!(
+            apply("I mean, I guess that's fine.", &list),
+            "That's fine."
+        );
+        assert_eq!(
+            apply("Fine. I mean, I guess that's it.", &list),
+            "Fine. That's it."
+        );
+    }
+
+    #[test]
+    fn a_removed_filler_does_not_capitalise_the_next_word() {
+        // "so" was lowercase because a comma preceded it, and a lowercase
+        // filler is not a sentence start.
+        let list = vec![snippet("um", "")];
+        assert_eq!(apply("um so I think", &list), "so I think");
+    }
+
+    #[test]
+    fn very_filler_heavy_dictation_reads_like_prose() {
+        let list = vec![snippet("um, uh", "")];
+        assert_eq!(
+            apply("So, um, I was thinking. Uh, maybe we go.", &list),
+            "So, I was thinking. Maybe we go."
+        );
+    }
+
+    #[test]
+    fn a_replacement_keeps_the_casing_it_was_typed_with() {
+        let list = vec![snippet("my handle", "zachOnGithub")];
+        assert_eq!(apply("my handle is me", &list), "zachOnGithub is me");
+    }
+
+    #[test]
+    fn multi_paragraph_text_keeps_its_line_breaks() {
+        let list = vec![snippet("um", ""), snippet("my email", "zach@example.com")];
+        assert_eq!(
+            apply("first line\nmy email here", &list),
+            "first line\nzach@example.com here"
+        );
+        assert_eq!(
+            apply("first line\num second line", &list),
+            "first line\nsecond line"
+        );
+    }
+
+    #[test]
+    fn a_deletion_beside_a_replacement_joins_cleanly() {
+        let list = vec![snippet("um", ""), snippet("my email", "zach@example.com")];
+        assert_eq!(
+            apply("um my email please", &list),
+            "zach@example.com please"
+        );
     }
 
     #[test]

@@ -41,7 +41,8 @@ Say a short phrase, get longer text out: an email address, a signature, boilerpl
 
 - Matching is exact, case-insensitive, whole words.
 - Commas separate alternatives: `my email, my address` → `you@example.com`.
-- Leave **Replace with** empty to delete the phrase (e.g. `um, uh, you know`).
+- Leave **Replace with** empty to delete the phrase (e.g. `um, uh, you know`). Deleting also tidies what the words left behind: a doubled space, a comma with nothing to separate, and a sentence that lost its capital (`I mean, that's fine.` → `That's fine.`).
+- Only the words around an edit are touched. Punctuation elsewhere in the transcript is the model's, and stays exactly as it wrote it.
 - Longest trigger wins. One pass only, so replacements are never re-expanded.
 
 ## History
