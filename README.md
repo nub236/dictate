@@ -48,22 +48,35 @@ Say a short phrase, get longer text out: an email address, a signature, boilerpl
 
 The last ten dictations are saved locally. The tray menu shows the five most recent; click one to copy it. **Clear History** wipes them.
 
-## Menu bar
+## Tray
 
-Dictate lives in the tray. There's no Dock icon. The menu has History, Keywords, Snippets, Settings, and Quit.
+Dictate lives in the tray. On macOS there's no Dock icon; on Windows it stays out of the taskbar until you open Settings. The menu has History, Keywords, Snippets, Settings, and Quit.
 
-It adds itself to your login items on first run so the hotkey works after a restart. To turn that off, use **System Settings → General → Login Items**.
+It adds itself to your login items on first run so the hotkey works after a restart. To turn that off:
+
+- **macOS:** System Settings → General → Login Items
+- **Windows:** Settings → Apps → Startup, or Task Manager → Startup apps
 
 ## Requirements
 
-- macOS 11+ or Windows (Linux isn't packaged, but you can [build from source](#building))
+- macOS 11+ or Windows 10+ (Linux isn't packaged, but you can [build from source](#building))
 - A ChatGPT account (the free tier works)
 - A microphone and an internet connection
 
-On macOS, setup asks for two permissions:
+### macOS
+
+Setup asks for two permissions:
 
 - **Microphone**, to record.
 - **Accessibility**, for the global hotkey and the paste keystroke.
+
+Grant both. Without Accessibility the hotkey does nothing at all; without Microphone every recording comes back empty. If you answered no, open **System Settings → Privacy & Security**, switch Dictate on in both lists, and use *Check again* in Settings.
+
+### Windows
+
+Windows asks once whether Dictate may use the microphone. If you missed it, turn Dictate on under **Settings → Privacy & security → Microphone**.
+
+There is no Accessibility grant to give: the global hotkey and the paste keystroke are ordinary keyboard hooks, so nothing else has to be approved.
 
 The keyboard listener only watches for your shortcut (and Escape while recording). It never records what you type. Dictate does no screen recording.
 
@@ -90,8 +103,9 @@ You'll need [Node.js](https://nodejs.org), the [Rust toolchain](https://rustup.r
 
 ```bash
 npm install
-npm run dev     # hot reload
-npm run build   # bundled app
+npm run dev       # hot reload
+npm run build     # bundled app
+npm run check:ui  # parse every browser script in ui/, no bundler needed
 ```
 
 The frontend is plain HTML/CSS/JS in `ui/`, with no bundler. The Rust side lives in `src-tauri/src/`:
@@ -108,9 +122,9 @@ Bundle targets are set in `src-tauri/tauri.conf.json` (`["app", "dmg"]` on macOS
 
 ## Troubleshooting
 
-**Hotkey does nothing.** Check the Accessibility permission, then use *Check again* in Settings. If another app owns the shortcut, pick a different one. `debug.log` shows what was tried.
+**Hotkey does nothing.** On macOS, check the Accessibility permission, then use *Check again* in Settings. On Windows there's nothing to grant, so another app probably owns that shortcut: pick a different one in Settings. `debug.log` shows what was tried either way.
 
-**"No sound was captured."** The mic permission is off, the input is muted, or the wrong device is selected.
+**"No sound was captured."** The mic permission is off, the input is muted, or the wrong device is selected. Re-allow the microphone under **System Settings → Privacy & Security → Microphone** on macOS, or **Settings → Privacy & security → Microphone** on Windows.
 
 **Text stops appearing.** Your ChatGPT session probably expired. Sign out and back in from Settings.
 
@@ -119,3 +133,7 @@ Bundle targets are set in `src-tauri/tauri.conf.json` (`["app", "dmg"]` on macOS
 ## Disclaimer
 
 Dictate is not an official OpenAI app. It signs in through the ChatGPT OAuth flow and calls the transcription endpoint the ChatGPT clients use. That endpoint isn't a documented public API and could change without notice. It's built for personal use: your account, your machine, your files.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
