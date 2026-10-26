@@ -44,11 +44,6 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.
 objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat", "block2", "std"] }
 block2 = { version = "0.6", features = ["alloc"] }
 objc2 = "0.6"
-# Measures History menu rows in points: the tray submenu flips to the left when
-# its widest item does not fit to the right of the menu, and a character count
-# cannot keep that width steady because the system font is proportional.
-objc2-app-kit = { version = "0.3", features = ["NSFont", "NSAttributedString", "NSStringDrawing", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary"] }
 # Same accessibility prompt Handy uses; registers the app in the Accessibility
 # list instead of quietly asking for a different TCC service.
 macos-accessibility-client = "0.0.1"

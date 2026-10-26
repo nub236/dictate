@@ -375,7 +375,7 @@ fn apply_custom_words_within_token(
         }
 
         if let Some((replacement, _)) =
-            find_best_match(&key, custom_words, &custom_word_match_keys, threshold, true)
+            find_best_match(&key, custom_words, custom_word_match_keys, threshold, true)
         {
             segments[index] =
                 preserve_case_pattern_for_span(&[run.as_str()], replacement);

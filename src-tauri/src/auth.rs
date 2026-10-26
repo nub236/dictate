@@ -106,7 +106,7 @@ impl Credentials {
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 pub fn b64url(data: &[u8]) -> String {
-    let mut out = String::with_capacity((data.len() * 4 + 2) / 3);
+    let mut out = String::with_capacity((data.len() * 4).div_ceil(3));
     for chunk in data.chunks(3) {
         let b = [
             chunk[0],
@@ -384,10 +384,10 @@ pub fn login(path: &Path) -> Result<Credentials, String> {
     let listeners = bind_listeners()?;
 
     let query = format!(
-        "response_type=code&client_id={CLIENT_ID}&redirect_uri={redirect}&scope={scope}\
+        "response_type=code&client_id={CLIENT_ID}&\
+         redirect_uri=http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}&scope={scope}\
          &code_challenge={challenge}&code_challenge_method=S256&state={state}\
          &id_token_add_organizations=true&codex_cli_simplified_flow=true",
-        redirect = format!("http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}"),
         scope = SCOPES.replace(' ', "%20"),
     );
     let url = format!("{AUTH_URL}?{query}");

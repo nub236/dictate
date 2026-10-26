@@ -163,13 +163,13 @@ impl Recording {
     /// `on_level` receives the loudest sample of each interval while the
     /// microphone is open, from 0 to 1. It runs on the audio delivery thread, so
     /// it must return quickly; the app uses it to drive the recording meter.
-    pub fn start(mut on_level: impl FnMut(f32) + Send + 'static) -> Result<Self, String> {
+    pub fn start(on_level: impl FnMut(f32) + Send + 'static) -> Result<Self, String> {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let (done_tx, done_rx) = mpsc::channel::<Result<Finished, String>>();
 
         std::thread::spawn(move || {
-            let result = capture(ready_tx, stop_rx, move |level| on_level(level));
+            let result = capture(ready_tx, stop_rx, on_level);
             let _ = done_tx.send(result);
         });
 

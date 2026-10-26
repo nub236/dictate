@@ -67,7 +67,7 @@ fn tidy_deletions(text: &str) -> String {
             if out.is_empty() {
                 continue;
             }
-            if out.chars().next_back() == Some(c) {
+            if out.ends_with(c) {
                 continue;
             }
             // "I think, ." loses the comma that had nothing left to separate.
@@ -124,7 +124,7 @@ pub fn apply(text: &str, snippets: &[Snippet]) -> String {
         return text.to_string();
     }
     // Longest trigger wins, so "my work email" beats "my email".
-    pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    pairs.sort_by_key(|pair| std::cmp::Reverse(pair.0.len()));
 
     let haystack = fold(text);
     let mut out = String::with_capacity(text.len());

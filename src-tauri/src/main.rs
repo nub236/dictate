@@ -5,7 +5,7 @@ mod engine;
 mod keywords;
 mod snippets;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -194,7 +194,7 @@ fn data_dir() -> PathBuf {
     base.join("dev.dictate")
 }
 
-fn load_config(dir: &PathBuf) -> Config {
+fn load_config(dir: &Path) -> Config {
     std::fs::read_to_string(dir.join("config.json"))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -209,7 +209,7 @@ fn save_config(dir: &PathBuf, config: &Config) -> Result<(), String> {
         .map_err(|error| format!("Could not save settings: {error}"))
 }
 
-fn load_history(dir: &PathBuf) -> Vec<Value> {
+fn load_history(dir: &Path) -> Vec<Value> {
     std::fs::read_to_string(dir.join("history.json"))
         .ok()
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
