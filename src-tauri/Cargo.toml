@@ -3,6 +3,7 @@ name = "dictate"
 version = "0.1.0"
 description = "ChatGPT dictation, anywhere you type"
 authors = ["dictate"]
+license = "MIT"
 edition = "2021"
 # `Option::is_none_or` in keywords.rs needs 1.82, so the declared minimum has to
 # match or cargo refuses a toolchain it could actually build with.
