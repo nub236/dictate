@@ -2,14 +2,14 @@
 
 Press a hotkey, talk, press it again. Your words show up wherever your cursor is.
 
-Dictate transcribes with your existing ChatGPT account. No API key, no per-word credits, no extra subscription. It's a small native app: a tray icon, a global hotkey, and a local settings window.
+Dictate transcribes with your existing ChatGPT account. No API key, no per-word credits, no extra subscription. It's a small app: a tray icon, a global hotkey, and a local settings window.
 
 ## How it works
 
 1. Press your shortcut in any app.
 2. A pill at the bottom of the screen shows bars moving with your voice. If the meter is flat, the mic isn't hearing you.
 3. Press the shortcut again. The audio goes to ChatGPT and the text comes back.
-4. Dictate pastes the text at your cursor, then restores your previous clipboard (unless you copied something else in the meantime).
+4. Dictate pastes the text at your cursor, then restores your previous clipboard.
 
 Press **Escape** while recording to discard the audio. Errors show up as a short amber message near the bottom of the screen.
 
@@ -31,7 +31,7 @@ It requests `openid profile email offline_access` and nothing more.
 
 ## Keywords
 
-For words that come back wrong: product names, surnames, jargon. Add `Ghostty` and "ghosty" or "ghost tea" becomes `Ghostty`. Matching is phonetic (Double Metaphone) plus edit distance, and capitalization is preserved. It runs locally and isn't sent to ChatGPT.
+For words that come back wrong: product names, surnames, jargon. Add `Ghostty` and "ghosty" or "ghost tea" becomes `Ghostty`. Matching is phonetic plus edit distance, and capitalization is preserved. It runs locally and isn't sent to ChatGPT.
 
 Keep it to obscure terms. A keyword that resembles a common word will cause false corrections.
 
@@ -74,8 +74,6 @@ Setup asks for two permissions:
 Grant both. Without Accessibility the hotkey does nothing at all; without Microphone every recording comes back empty. If you answered no, open **System Settings → Privacy & Security**, switch Dictate on in both lists, and use *Check again* in Settings.
 
 ### Windows
-
-Windows asks once whether Dictate may use the microphone. If you missed it, turn Dictate on under **Settings → Privacy & security → Microphone**.
 
 There is no Accessibility grant to give: the global hotkey and the paste keystroke are ordinary keyboard hooks, so nothing else has to be approved.
 
@@ -125,7 +123,7 @@ Bundle targets are set in `src-tauri/tauri.conf.json` (`["app", "dmg"]` on macOS
 
 **Hotkey does nothing.** On macOS, check the Accessibility permission, then use *Check again* in Settings. On Windows there's nothing to grant, so another app probably owns that shortcut: pick a different one in Settings. `debug.log` shows what was tried either way.
 
-**"No sound was captured."** The mic permission is off, the input is muted, or the wrong device is selected. Re-allow the microphone under **System Settings → Privacy & Security → Microphone** on macOS, or **Settings → Privacy & security → Microphone** on Windows.
+**"No sound was captured."** The mic permission is off, the input is muted, or the wrong device is selected. Re-allow the microphone under **System Settings → Privacy & Security → Microphone** on macOS.
 
 **Text stops appearing.** Your ChatGPT session probably expired. Sign out and back in from Settings.
 
