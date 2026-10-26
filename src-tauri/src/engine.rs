@@ -612,43 +612,63 @@ pub fn prompt_accessibility() -> bool {
 // hotkey (handy-keys: system-wide, swallows the trigger, modifier-only support)
 // --------------------------------------------------------------------------- //
 
+// The name of each shortcut modifier is the platform's, not macOS's: the key a
+// Mac calls Option is Alt on Windows and Linux, and ⌘/⌥ mean nothing outside a
+// Mac. The app spells the same keys out the same way in the UI, so the two
+// labels never disagree.
+const CMD_NAME: &str = if cfg!(target_os = "macos") {
+    "Command"
+} else if cfg!(target_os = "windows") {
+    "Win"
+} else {
+    "Super"
+};
+const CTRL_NAME: &str = if cfg!(target_os = "macos") { "Control" } else { "Ctrl" };
+const ALT_NAME: &str = if cfg!(target_os = "macos") { "Option" } else { "Alt" };
+const SHIFT_NAME: &str = "Shift";
+
 pub fn pretty(name: &str) -> String {
-    let bare = match name {
-        "right_option" => Some("Right Option"),
-        "left_option" => Some("Left Option"),
-        "right_shift" => Some("Right Shift"),
-        "left_shift" => Some("Left Shift"),
-        "right_ctrl" => Some("Right Control"),
-        "left_ctrl" => Some("Left Control"),
-        "right_cmd" => Some("Right Command"),
-        "left_cmd" => Some("Left Command"),
-        "fn" => Some("Fn"),
-        _ => None,
-    };
-    if let Some(label) = bare {
-        return label.to_string();
+    if name == "fn" {
+        return "Fn".to_string();
     }
 
-    let mut out = String::new();
-    for part in name.split('+') {
-        let token = match part {
-            "cmd" => "⌘",
-            "ctrl" => "⌃",
-            "alt" => "⌥",
-            "shift" => "⇧",
-            "space" => "Space",
-            "up" => "↑",
-            "down" => "↓",
-            "left" => "←",
-            "right" => "→",
-            other => {
-                out.push_str(&other.to_uppercase());
-                continue;
-            }
-        };
-        out.push_str(token);
+    // A bare modifier names one physical key, so which side it is survives and
+    // only the key's own name follows the platform.
+    let (side, key) = if let Some(key) = name.strip_prefix("left_") {
+        ("Left", key)
+    } else if let Some(key) = name.strip_prefix("right_") {
+        ("Right", key)
+    } else {
+        ("", name)
+    };
+    let bare = match key {
+        "option" => Some(ALT_NAME),
+        "ctrl" => Some(CTRL_NAME),
+        "cmd" => Some(CMD_NAME),
+        "shift" => Some(SHIFT_NAME),
+        _ => None,
+    };
+    if !side.is_empty() {
+        if let Some(label) = bare {
+            return format!("{side} {label}");
+        }
     }
-    out
+
+    name.split('+')
+        .map(|part| match part {
+            "cmd" => CMD_NAME.to_string(),
+            "ctrl" => CTRL_NAME.to_string(),
+            "alt" => ALT_NAME.to_string(),
+            "shift" => SHIFT_NAME.to_string(),
+            "space" => "Space".to_string(),
+            "up" => "Up".to_string(),
+            "down" => "Down".to_string(),
+            "left" => "Left".to_string(),
+            "right" => "Right".to_string(),
+            other => other.to_uppercase(),
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 fn handy_hotkey(name: &str) -> Result<Hotkey, String> {
@@ -946,6 +966,40 @@ mod tests {
         // from the server.
         assert_eq!(split_status(""), (String::new(), 0));
         assert_eq!(split_status("garbage"), ("garbage".to_string(), 0));
+    }
+
+    #[test]
+    fn shortcut_labels_use_the_platforms_key_names() {
+        // A bare modifier keeps its side; only the key's own name follows the
+        // platform, so the same physical key reads correctly everywhere.
+        assert_eq!(
+            pretty("right_option"),
+            if cfg!(target_os = "macos") { "Right Option" } else { "Right Alt" }
+        );
+        let cmd = if cfg!(target_os = "macos") {
+            "Left Command"
+        } else if cfg!(target_os = "windows") {
+            "Left Win"
+        } else {
+            "Left Super"
+        };
+        assert_eq!(pretty("left_cmd"), cmd);
+        assert_eq!(pretty("fn"), "Fn");
+
+        // A combination is spelled out, and a macOS-only glyph must not survive
+        // into a label on any platform.
+        assert_eq!(
+            pretty("ctrl+shift+t"),
+            if cfg!(target_os = "macos") {
+                "Control + Shift + T"
+            } else {
+                "Ctrl + Shift + T"
+            }
+        );
+        let everything = pretty("cmd+alt+ctrl+shift+up");
+        for glyph in ['⌘', '⌥', '⇧', '⌃', '↑', '↓', '←', '→'] {
+            assert!(!everything.contains(glyph), "{everything} still contains {glyph}");
+        }
     }
 
     #[test]

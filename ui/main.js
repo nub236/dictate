@@ -39,25 +39,41 @@ function log(message) {
 
 const $ = (id) => document.getElementById(id);
 
-const bareLabels = {
-  right_option: "Right Option",
-  left_option: "Left Option",
-  right_shift: "Right Shift",
-  left_shift: "Left Shift",
-  right_ctrl: "Right Control",
-  left_ctrl: "Left Control",
-  right_cmd: "Right Command",
-  left_cmd: "Left Command",
-  fn: "Fn",
+// Shortcut modifiers are spelled out the way the platform names them. Symbols
+// (⌘ ⌥ ⇧ ⌃) only mean anything on macOS and read badly even there, and the key
+// called Option on a Mac is called Alt on Windows and Linux.
+//
+// Key order is the platform's own reading order, which also decides how the
+// "add a modifier" hint lists them.
+const modifierLabels = {
+  macos: { cmd: "Command", ctrl: "Control", alt: "Option", shift: "Shift" },
+  windows: { ctrl: "Ctrl", alt: "Alt", shift: "Shift", cmd: "Win" },
+  linux: { ctrl: "Ctrl", alt: "Alt", shift: "Shift", cmd: "Super" },
 };
 
+function platformName() {
+  return app.platform || perms.platform || "macos";
+}
+
+function modifierNames() {
+  return modifierLabels[platformName()] || modifierLabels.macos;
+}
+
+// The id names a physical key, so the label follows the platform too: the same
+// key is Right Option on a Mac and Right Alt elsewhere.
+const bareModifierNames = { option: "alt", ctrl: "ctrl", cmd: "cmd", shift: "shift" };
+
 function prettyHotkey(id) {
-  if (bareLabels[id]) return bareLabels[id];
-  const symbols = { cmd: "⌘", ctrl: "⌃", alt: "⌥", shift: "⇧" };
+  if (id === "fn") return "Fn";
+  const bare = /^(left|right)_(option|ctrl|cmd|shift)$/.exec(id);
+  if (bare) {
+    const side = bare[1] === "left" ? "Left" : "Right";
+    return `${side} ${modifierNames()[bareModifierNames[bare[2]]]}`;
+  }
   return id
     .split("+")
-    .map((part) => symbols[part] || (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)))
-    .join("");
+    .map((part) => modifierNames()[part] || (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)))
+    .join(" + ");
 }
 
 function updateHotkeyState(message) {
@@ -721,7 +737,8 @@ function attachCapture(boxId, valueId, hintId) {
     const name = keyName(event.code);
     if (!name) return;
     if (!mods.length) {
-      hint.textContent = "Add ⌘, ⌃, ⌥ or ⇧, or press a modifier by itself";
+      const names = Object.values(modifierNames());
+      hint.textContent = `Add ${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}, or press a modifier by itself`;
       return;
     }
     commit([...mods, name].join("+"));
