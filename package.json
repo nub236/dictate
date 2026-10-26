@@ -6,6 +6,7 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "ui:dev": "node ui-dev-server.mjs",
+    "check:ui": "node ui-check.mjs",
     "build": "tauri build"
   },
   "devDependencies": {
