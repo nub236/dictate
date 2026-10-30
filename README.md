@@ -129,6 +129,8 @@ Bundle targets are set in `src-tauri/tauri.conf.json` (`["app", "dmg"]` on macOS
 
 **Text stops appearing.** Your ChatGPT session probably expired. Sign out and back in from Settings.
 
+**"Codex dictation usage limit reached."** ChatGPT refused the upload with a 429 on the route Codex dictation uses, and Dictate cannot work around it. The limit belongs to the **account**, not the plan: the same free plan transcribes normally on another account signed in on the same Mac, and OpenAI's own macOS app has been reported showing this message while the usage page still shows the whole allowance unused. Whether a blocked account ever clears is unknown — the response carries no reset time, there is no published limit, and nothing local changes it. Reinstalling Dictate, clearing its config, or signing out and back in do not help. Signing in with an account that isn't affected works straight away; otherwise the only thing to do is try again later and see whether the counter that is refusing ever rolls over.
+
 **A word keeps coming back wrong.** Add it to Keywords. If it's a common word, try a more distinctive spelling of how you say it.
 
 ## Disclaimer
