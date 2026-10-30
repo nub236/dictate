@@ -688,7 +688,10 @@ fn handle_toggle(app: &AppHandle) {
             }
         }) {
             Ok(recording) => {
-                debug_log("recording: started");
+                debug_log(&format!(
+                    "recording: started (microphone: {})",
+                    recording.device()
+                ));
                 *state.recording.lock().unwrap() = Some(recording);
                 set_cancel_armed(app, true);
                 show_pill(app, "listening");

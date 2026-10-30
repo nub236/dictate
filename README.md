@@ -15,6 +15,8 @@ Press **Escape** while recording to discard the audio. Errors show up as a short
 
 The mic is only open between the two presses.
 
+Dictate records from your Mac's built-in microphone, not from a Bluetooth headset's. A headset's microphone only starts streaming once macOS has switched the headset out of its music profile, which takes seconds — the first words of a dictation would be gone before any audio arrived — and what arrives is narrowband. Any other input you have picked (a USB microphone, say) is left alone, and a machine with no built-in microphone uses the system default.
+
 ## Signing in
 
 Click **Continue with ChatGPT** and approve the request in your browser. Dictate catches the redirect on `localhost:1455`, stores the tokens, and refreshes them as needed. **Sign out** deletes them and asks ChatGPT to revoke the refresh token; if a sign-in was still waiting for its browser tab, signing out ends it too.

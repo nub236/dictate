@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use arboard::Clipboard;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener, Modifiers};
-use handy_recorder::{AudioChunk, Recorder, RecorderConfig, Sink};
+use handy_recorder::{list_input_devices, AudioChunk, InputDevice, Recorder, RecorderConfig, Sink};
 
 use crate::auth::Credentials;
 
@@ -157,6 +157,8 @@ pub struct Finished {
 pub struct Recording {
     stop: mpsc::Sender<()>,
     done: mpsc::Receiver<Result<Finished, String>>,
+    /// The device the audio is coming from, for the log.
+    device: String,
 }
 
 impl Recording {
@@ -164,7 +166,7 @@ impl Recording {
     /// microphone is open, from 0 to 1. It runs on the audio delivery thread, so
     /// it must return quickly; the app uses it to drive the recording meter.
     pub fn start(on_level: impl FnMut(f32) + Send + 'static) -> Result<Self, String> {
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<String, String>>();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let (done_tx, done_rx) = mpsc::channel::<Result<Finished, String>>();
 
@@ -174,13 +176,19 @@ impl Recording {
         });
 
         match ready_rx.recv_timeout(Duration::from_secs(6)) {
-            Ok(Ok(())) => Ok(Recording {
+            Ok(Ok(device)) => Ok(Recording {
                 stop: stop_tx,
                 done: done_rx,
+                device,
             }),
             Ok(Err(message)) => Err(message),
             Err(_) => Err(format!("The microphone did not start.{MIC_HINT}")),
         }
+    }
+
+    /// What was opened, e.g. "MacBook Air Microphone".
+    pub fn device(&self) -> &str {
+        &self.device
     }
 
     /// Stops capture and hands back the finished WAV, its length and loudest peak.
@@ -246,11 +254,13 @@ impl<F: FnMut(f32) + Send + 'static> Sink for LevelSink<F> {
 }
 
 fn capture(
-    ready: mpsc::Sender<Result<(), String>>,
+    ready: mpsc::Sender<Result<String, String>>,
     stop: mpsc::Receiver<()>,
     on_level: impl FnMut(f32) + Send + 'static,
 ) -> Result<Finished, String> {
-    let recorder = Recorder::open_with_failure_handler(RecorderConfig::speech(), |error| {
+    let mut config = RecorderConfig::speech();
+    config.device = preferred_device();
+    let recorder = Recorder::open_with_failure_handler(config, |error| {
         eprintln!("audio: recorder failed: {error}");
     })
     .map_err(|error| mic_error_message(&error))?;
@@ -260,7 +270,7 @@ fn capture(
     recorder
         .start(sink)
         .map_err(|_| "The microphone could not start recording.".to_string())?;
-    let _ = ready.send(Ok(()));
+    let _ = ready.send(Ok(info.device.name.clone()));
 
     // Wait for the hotkey to toggle off. If nothing arrives within
     // MAX_RECORDING the app stops the recording itself, and the caller needs to
@@ -310,6 +320,78 @@ fn capture(
         peak,
         hit_limit,
     })
+}
+
+/// True for the microphone of a Bluetooth headset, which macOS names after the
+/// headset and lists under its Bluetooth address (`80-95-3A-F2-3B-D2:input`) —
+/// the same UID shape handy-recorder uses to find a headset's output device.
+fn is_bluetooth(device: &InputDevice) -> bool {
+    looks_bluetooth(&device.id, &device.name)
+}
+
+fn looks_bluetooth(uid: &str, name: &str) -> bool {
+    if let Some((address, side)) = uid.rsplit_once(':') {
+        let looks_like_address = address.len() == 17
+            && address.split('-').count() == 6
+            && address
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() || c == '-');
+        if looks_like_address && matches!(side, "input" | "output") {
+            return true;
+        }
+    }
+    let name = name.to_lowercase();
+    ["airpods", "beats", "bluetooth"]
+        .iter()
+        .any(|word| name.contains(word))
+}
+
+/// True for the microphone built into the machine. CoreAudio gives it the same
+/// UID on every Mac; the names cover anything that reports it differently, and
+/// hardware names are not localized.
+fn is_built_in(device: &InputDevice) -> bool {
+    looks_built_in(&device.id, &device.name)
+}
+
+fn looks_built_in(uid: &str, name: &str) -> bool {
+    if uid == "BuiltInMicrophoneDevice" {
+        return true;
+    }
+    let name = name.to_lowercase();
+    [
+        "built-in",
+        "builtin",
+        "internal",
+        "macbook",
+        "imac",
+        "mac mini",
+        "mac studio",
+        "mac pro",
+    ]
+    .iter()
+    .any(|word| name.contains(word))
+}
+
+/// The device to record from, or `None` to take the system default.
+///
+/// A Bluetooth headset's microphone costs the first seconds of every dictation:
+/// the link only starts streaming once macOS has moved the headset out of its
+/// music profile, which takes seconds, so whatever was said in the meantime is
+/// simply not captured — and the audio that does arrive is narrowband. The
+/// machine's own microphone is always awake and always the better capture, so
+/// it is used whenever the system default has become a headset. Any other
+/// input the user picked is left alone, and a Mac without a built-in
+/// microphone keeps the default rather than recording nothing.
+fn preferred_device() -> Option<String> {
+    let devices = list_input_devices().ok()?;
+    let default = devices.iter().find(|device| device.is_default)?;
+    if !is_bluetooth(default) {
+        return None;
+    }
+    devices
+        .iter()
+        .find(|device| is_built_in(device))
+        .map(|device| device.id.clone())
 }
 
 /// Turns handy-recorder errors into something a person can act on.
@@ -1014,8 +1096,40 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_token_is_not_retried_and_a_server_error_is() {
-        let failure = |status| TranscribeFailure {
+    fn a_bluetooth_headset_is_never_the_microphone() {
+        // What macOS reports for a paired headset, whatever it is called.
+        assert!(looks_bluetooth(
+            "80-95-3A-F2-3B-D2:input",
+            "Zachary's AirPods Pro"
+        ));
+        // A headset whose UID came out another shape is still named as one.
+        assert!(looks_bluetooth("some-other-uid", "AirPods Pro"));
+        assert!(looks_bluetooth("some-other-uid", "Beats Fit Pro"));
+        // The machine's own microphone, and anything wired, is left alone.
+        assert!(!looks_bluetooth(
+            "BuiltInMicrophoneDevice",
+            "MacBook Air Microphone"
+        ));
+        assert!(!looks_bluetooth(
+            "AppleUSBAudioEngine:Shure:MV7:1",
+            "Shure MV7"
+        ));
+    }
+
+    #[test]
+    fn the_machines_own_microphone_is_recognised() {
+        assert!(looks_built_in(
+            "BuiltInMicrophoneDevice",
+            "MacBook Air Microphone"
+        ));
+        // A UID that differs is still matched by the hardware name, which is
+        // not localized and always carries the model.
+        assert!(looks_built_in("", "Mac mini Microphone"));
+        assert!(!looks_built_in("", "Shure MV7"));
+    }
+
+    #[test]
+    fn a_refused_token_is_not_retried_and_a_server_error_is() {        let failure = |status| TranscribeFailure {
             status,
             message: String::new(),
         };
