@@ -2,7 +2,9 @@
 
 Press a hotkey, talk, press it again. Your words show up wherever your cursor is.
 
-Dictate transcribes with your existing ChatGPT account. No API key, no per-word credits, no extra subscription. It's a small app: a tray icon, a global hotkey, and a local settings window.
+**Dictation is not unlimited.** Every recording is sent to ChatGPT to be transcribed, and ChatGPT applies a usage limit to that route which this app cannot see, raise, or work around. It can refuse everything — `Codex dictation usage limit reached` — on an account that has barely dictated, and the refusal carries no reset time. Dictate then has nothing to fall back on: the audio is sent, refused, and deleted. Treat dictation as something your account allows today, not something the app guarantees. [Troubleshooting](#troubleshooting) has the details.
+
+Within that, Dictate uses the account you already have: no API key, no per-word credits, no extra subscription. It's a small app: a tray icon, a global hotkey, and a local settings window.
 
 ## How it works
 
