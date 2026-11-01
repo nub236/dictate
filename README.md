@@ -1,10 +1,8 @@
 # Dictate
 
-Press a hotkey, talk, press it again. Your words show up wherever your cursor is.
+Get free, high-quality dictation using the ChatGPT account you already have, without needing a local model, API key, or subscription.
 
-**Dictation is not unlimited.** Every recording is sent to ChatGPT to be transcribed, and ChatGPT applies a usage limit to that route which this app cannot see, raise, or work around. It can refuse everything — `Codex dictation usage limit reached` — on an account that has barely dictated, and the refusal carries no reset time. Dictate then has nothing to fall back on: the audio is sent, refused, and deleted. Treat dictation as something your account allows today, not something the app guarantees. [Troubleshooting](#troubleshooting) has the details.
-
-Within that, Dictate uses the account you already have: no API key, no per-word credits, no extra subscription. It's a small app: a tray icon, a global hotkey, and a local settings window.
+**Dictation is not unlimited.** Every recording is sent to ChatGPT to be transcribed, and ChatGPT applies a usage limit to that route which this app cannot see, raise, or work around. It can refuse everything — `Codex dictation usage limit reached`. Dictate then has nothing to fall back on: the audio is sent, refused, and deleted. The good news is that if you hit the limit, it should reset at the end of the week, so you just have to wait. Paid plans probably have much higher limits for this than the free plan, so you might not run into this issue if you are on a paid plan, though that is not guaranteed. [Troubleshooting](#troubleshooting) has the details.
 
 ## How it works
 
@@ -131,9 +129,9 @@ Bundle targets are set in `src-tauri/tauri.conf.json` (`["app", "dmg"]` on macOS
 
 **Text stops appearing.** Your ChatGPT session probably expired. Sign out and back in from Settings.
 
-**"Codex dictation usage limit reached."** ChatGPT refused the upload with a 429 on the route Codex dictation uses, and Dictate cannot work around it. The limit belongs to the **account**, not the plan: the same free plan transcribes normally on another account signed in on the same Mac, and OpenAI's own macOS app has been reported showing this message while the usage page still shows the whole allowance unused. Whether a blocked account ever clears is unknown — the response carries no reset time, there is no published limit, and nothing local changes it. Reinstalling Dictate, clearing its config, or signing out and back in do not help. Signing in with an account that isn't affected works straight away; otherwise the only thing to do is try again later and see whether the counter that is refusing ever rolls over.
+**"Codex dictation usage limit reached."** ChatGPT refused the upload with a 429 on the route Codex dictation uses, and Dictate cannot work around it. The limit belongs to the **account**, not the plan: the same free plan transcribes normally on another account signed in on the same Mac, and OpenAI's own macOS app has been reported showing this message while the usage page still shows the whole allowance unused. Signing in with an account that isn't affected works straight away; otherwise the only thing to do is try again later when the usage limit resets.
 
-**A word keeps coming back wrong.** Add it to Keywords. If it's a common word, try a more distinctive spelling of how you say it.
+**A word keeps coming back wrong.** Add it to Keywords. If it's a common word, try a more distinctive way of saying it.
 
 ## Disclaimer
 
