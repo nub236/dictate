@@ -9,6 +9,11 @@
 //! Nothing here may cost the user their dictation. Every failure is reported as
 //! a `Failure` and the caller pastes the raw transcript instead.
 
+// The model list and the instruction helpers are exercised by the probe binary
+// and by the settings page to come; an ordinary app build does not call all of
+// them yet, and the warnings would otherwise bury real ones.
+#![allow(dead_code)]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;

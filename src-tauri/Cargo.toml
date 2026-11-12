@@ -8,6 +8,9 @@ edition = "2021"
 # `Option::is_none_or` in keywords.rs needs 1.82, so the declared minimum has to
 # match or cargo refuses a toolchain it could actually build with.
 rust-version = "1.82"
+# The package has a second binary (the probe) behind a feature, and `tauri dev`
+# runs `cargo run` with no `--bin`, which cannot choose between them.
+default-run = "dictate"
 
 [features]
 # The probe is a debugging aid that asks one question of the signed-in account:
