@@ -9,6 +9,17 @@ edition = "2021"
 # match or cargo refuses a toolchain it could actually build with.
 rust-version = "1.82"
 
+[features]
+# The probe is a debugging aid that asks one question of the signed-in account:
+# can this plan use the enhancement route, and with which models. It is opt-in
+# so an ordinary build never compiles it.
+probe = []
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+required-features = ["probe"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

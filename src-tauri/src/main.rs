@@ -2,6 +2,7 @@
 
 mod auth;
 mod engine;
+mod enhance;
 mod keywords;
 mod snippets;
 
