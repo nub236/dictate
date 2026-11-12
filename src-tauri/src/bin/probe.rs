@@ -13,18 +13,26 @@
 //! one short transcript and prints the model list, the status, the time taken
 //! and the rewritten text. Nothing is written to disk.
 
+#[path = "../console.rs"]
+mod console;
 #[path = "../enhance.rs"]
 mod enhance;
 
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+/// The same token endpoint and client the app signs in with, so an expired
+/// token can be renewed here instead of requiring a dictation first.
+const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const SCOPES: &str = "openid profile email offline_access";
 
 /// A sample that a cleanup pass has something to do with: fillers, a
 /// self-correction and no punctuation.
 const SAMPLE: &str = "so um i think we should uh move the meeting to thursday no wait friday at two";
 
-const INSTRUCTIONS: &str = "You clean up dictated text. Remove filler words and resolve \
-self-corrections. Keep the speaker's words and meaning. Fix punctuation and capitalization. \
-Reply with the cleaned text only, with no commentary or quotation marks.";
+const INSTRUCTIONS: &str = enhance::DEFAULT_INSTRUCTIONS;
 
 /// Where the app keeps its files, mirroring `data_dir` in `main.rs`.
 fn data_dir() -> PathBuf {
@@ -42,6 +50,68 @@ fn data_dir() -> PathBuf {
         .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_else(|_| PathBuf::from("."));
     base.join("dev.dictate")
+}
+
+/// Exchanges the stored refresh token for a fresh access token.
+///
+/// The new token is used for this run only: auth.json is left exactly as the
+/// app wrote it, so a diagnostic can never break a working sign-in.
+fn refresh(stored: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": stored,
+        "client_id": CLIENT_ID,
+        "scope": SCOPES,
+    })
+    .to_string();
+
+    let mut command = Command::new("curl");
+    command.args([
+        "-sS",
+        "--http1.1",
+        "--max-time",
+        "45",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "-H",
+        "Accept: application/json",
+        "-d",
+        "@-",
+        TOKEN_URL,
+    ]);
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    console::hide_console(&mut command);
+
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = stdin.write_all(body.as_bytes());
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+        format!(
+            "the token endpoint did not answer with JSON: {}",
+            text.chars().take(200).collect::<String>()
+        )
+    })?;
+    value
+        .get("access_token")
+        .and_then(|token| token.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            let detail = value
+                .get("error_description")
+                .and_then(|detail| detail.as_str())
+                .or_else(|| value.get("error").and_then(|error| error.as_str()))
+                .unwrap_or("no access token in the response");
+            detail.to_string()
+        })
 }
 
 fn now() -> i64 {
@@ -69,10 +139,11 @@ fn main() {
             return;
         }
     };
-    let Some(access_token) = value.get("access_token").and_then(|token| token.as_str()) else {
+    let Some(stored_token) = value.get("access_token").and_then(|token| token.as_str()) else {
         eprintln!("auth.json carries no access_token; sign in from the app first.");
         return;
     };
+    let mut access_token = stored_token.to_string();
     let account_id = value
         .get("account_id")
         .and_then(|id| id.as_str())
@@ -94,14 +165,25 @@ fn main() {
         }
     );
     if expires_at <= now() + 60 {
-        println!(
-            "\nThe stored token has expired. Dictate refreshes it on the next dictation:\n\
-             dictate once in the app, then run this again.\n"
-        );
+        let stored = value
+            .get("refresh_token")
+            .and_then(|token| token.as_str())
+            .filter(|token| !token.is_empty());
+        match stored.map(refresh) {
+            Some(Ok(fresh)) => {
+                println!("refreshed: {} chars, for this run only", fresh.chars().count());
+                access_token = fresh;
+            }
+            Some(Err(error)) => {
+                println!("refresh failed: {error}");
+                println!("Sign out and back in from Dictate, then run this again.\n");
+            }
+            None => println!("auth.json carries no refresh token; sign in from the app first.\n"),
+        }
     }
 
     let account = enhance::Account {
-        access_token,
+        access_token: &access_token,
         account_id,
     };
 
@@ -129,7 +211,7 @@ fn main() {
                 .map(|model| model.slug.clone())
         })
         .or_else(|| models.first().map(|model| model.slug.clone()))
-        .unwrap_or_else(|| "gpt-6-luna".to_string());
+        .unwrap_or_else(|| enhance::DEFAULT_MODEL.to_string());
 
     println!("\n== rewrite ==");
     println!("model: {model}");

@@ -39,22 +39,10 @@ fn transcribe_user_agent() -> String {
 
 /// Keeps a spawned console program from opening a console window.
 ///
-/// Dictate is a GUI binary and owns no console, so Windows hands every console
-/// program it starts a new console window — with curl that is a black rectangle
-/// flashing on screen for as long as the request runs. CREATE_NO_WINDOW is the
-/// documented way to ask for no console at all. Everywhere else this is a no-op.
-pub fn hide_console(command: &mut Command) {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = command;
-    }
-}
+/// The implementation lives in `console` because the probe binary includes
+/// modules of its own and cannot reach into this one. This re-export is kept so
+/// every existing `engine::hide_console` call site keeps working.
+pub use crate::console::hide_console;
 
 /// What the global keyboard listener reports to the app.
 pub enum HotkeySignal {

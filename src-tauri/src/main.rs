@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod auth;
+mod console;
 mod engine;
 mod enhance;
 mod keywords;
@@ -99,7 +100,7 @@ fn write_atomic(path: &PathBuf, contents: &str) -> std::io::Result<()> {
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 
@@ -119,6 +120,37 @@ tauri_nspanel::tauri_panel! {
     })
 }
 
+/// The rewrite applied to each transcript before it is pasted.
+///
+/// On by default, because a failed rewrite can never cost the dictation: the
+/// pipeline falls back to the raw transcript on every error.
+#[derive(Serialize, Deserialize, Clone)]
+struct Enhancement {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    /// The model slug to rewrite with. Discovery can return an empty list on a
+    /// free plan, so a model that answers is kept here.
+    #[serde(default = "default_enhance_model")]
+    model: String,
+    /// What the rewrite is told to do. Empty means the built-in cleanup pass.
+    #[serde(default)]
+    prompt: String,
+}
+
+impl Default for Enhancement {
+    fn default() -> Self {
+        Enhancement {
+            enabled: true,
+            model: default_enhance_model(),
+            prompt: String::new(),
+        }
+    }
+}
+
+fn default_enhance_model() -> String {
+    enhance::DEFAULT_MODEL.to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct Config {
     #[serde(default = "default_hotkey")]
@@ -131,6 +163,9 @@ struct Config {
     /// Spoken phrases replaced with text that was never said.
     #[serde(default)]
     snippets: Vec<snippets::Snippet>,
+    /// Rewriting each transcript with the user's ChatGPT account.
+    #[serde(default)]
+    enhancement: Enhancement,
     /// Start with the system. A menu-bar dictation app that has to be launched
     /// by hand after every restart does not do its job, so this defaults on.
     /// There is deliberately no UI for it: macOS shows its own notification and
@@ -160,6 +195,7 @@ impl Default for Config {
             onboarded: false,
             keywords: Vec::new(),
             snippets: Vec::new(),
+            enhancement: Enhancement::default(),
             launch_at_login: true,
         }
     }
@@ -493,6 +529,21 @@ fn build_menu(app: &AppHandle, history: &[Value]) -> tauri::Result<Menu<Wry>> {
     let history_menu = Submenu::with_items(app, "History", true, &refs)?;
     let keywords_item = MenuItem::with_id(app, "keywords", "Keywords", true, None::<&str>)?;
     let snippets_item = MenuItem::with_id(app, "snippets", "Snippets", true, None::<&str>)?;
+    let enhance_on = app
+        .state::<AppState>()
+        .config
+        .lock()
+        .unwrap()
+        .enhancement
+        .enabled;
+    let enhance_item = CheckMenuItem::with_id(
+        app,
+        "enhance",
+        "Enhance Transcript",
+        true,
+        enhance_on,
+        None::<&str>,
+    )?;
     // Lands on the account screen rather than the welcome tour: sign out and the
     // permission states are the only things this needs to reach after setup.
     let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
@@ -505,6 +556,7 @@ fn build_menu(app: &AppHandle, history: &[Value]) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &keywords_item,
             &snippets_item,
+            &enhance_item,
             &settings_item,
             &PredefinedMenuItem::separator(app)?,
             &quit,
@@ -644,6 +696,65 @@ fn cancel_recording(app: &AppHandle) {
     let _ = app.emit("recording-cancelled", json!({}));
 }
 
+/// What the prompt setting means: the user's text, or the built-in pass.
+fn prompt_for(enhancement: &Enhancement) -> String {
+    let prompt = enhancement.prompt.trim();
+    if prompt.is_empty() {
+        enhance::DEFAULT_INSTRUCTIONS.to_string()
+    } else {
+        prompt.to_string()
+    }
+}
+
+/// Rewrites a transcript when the setting is on.
+///
+/// A rewrite may never cost the dictation: the raw transcript comes back
+/// unchanged on every failure, and the reason goes to the log rather than to the
+/// user, who is about to paste either way.
+fn enhance_transcript(state: &AppState, transcript: &str) -> String {
+    let (enabled, model, instructions) = {
+        let config = state.config.lock().unwrap();
+        (
+            config.enhancement.enabled,
+            config.enhancement.model.clone(),
+            prompt_for(&config.enhancement),
+        )
+    };
+    if !enabled {
+        return transcript.to_string();
+    }
+    let credentials = match auth::valid(&state.auth_file) {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            debug_log(&format!("enhance: skipped ({error})"));
+            return transcript.to_string();
+        }
+    };
+    let account = enhance::Account {
+        access_token: &credentials.access_token,
+        account_id: credentials.account_id.as_deref(),
+    };
+    let started = Instant::now();
+    match enhance::enhance(&account, &model, &instructions, transcript) {
+        Ok(text) => {
+            debug_log(&format!(
+                "enhance: ok in {}ms, {} chars -> {} chars ({model})",
+                started.elapsed().as_millis(),
+                transcript.chars().count(),
+                text.chars().count()
+            ));
+            text
+        }
+        Err(failure) => {
+            debug_log(&format!(
+                "enhance: failed ({}): {} -- pasting the raw transcript",
+                failure.status, failure.message
+            ));
+            transcript.to_string()
+        }
+    }
+}
+
 // --------------------------------------------------------------------------- //
 // recording pipeline
 // --------------------------------------------------------------------------- //
@@ -766,6 +877,12 @@ fn handle_toggle(app: &AppHandle) {
                 return Ok(());
             }
             debug_log(&format!("transcribe: ok ({})", &transcript.chars().take(60).collect::<String>()));
+
+            // Rewrite with the account the transcription already used, before
+            // anything local runs: keyword spellings and snippets stay
+            // authoritative over the model, and a failed rewrite leaves the raw
+            // transcript exactly as it came back.
+            let transcript = enhance_transcript(&state, &transcript);
 
             // Fix names and terms locally, before the text is saved or pasted.
             let custom_words = state.config.lock().unwrap().keywords.clone();
@@ -1327,6 +1444,35 @@ fn main() {
                     "quit" => {
                         stop_hotkey(app);
                         app.exit(0);
+                    }
+                    "enhance" => {
+                        let state = app.state::<AppState>();
+                        let mut config = state.config.lock().unwrap().clone();
+                        config.enhancement.enabled = !config.enhancement.enabled;
+                        let enabled = config.enhancement.enabled;
+                        *state.config.lock().unwrap() = config.clone();
+                        if let Err(error) = save_config(&state.dir, &config) {
+                            debug_log(&format!("enhance: could not save ({error})"));
+                        }
+                        debug_log(&format!(
+                            "enhance: {}",
+                            if enabled { "on" } else { "off" }
+                        ));
+                        toast(
+                            app,
+                            if enabled {
+                                "Enhancement on"
+                            } else {
+                                "Enhancement off"
+                            },
+                        );
+                        // Rebuilding the menu from inside its own click handler
+                        // is unreliable on macOS; let the menu close first.
+                        let handle = app.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            refresh_tray(&handle);
+                        });
                     }
                     "settings" => show_window(app, "signin"),
                     "keywords" => show_window(app, "keywords"),

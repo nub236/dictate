@@ -16,8 +16,24 @@ use std::time::Duration;
 /// The Codex inference route. `store: false` means no conversation is created.
 pub const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
+/// The cleanup pass a fresh install starts with.
+pub const DEFAULT_INSTRUCTIONS: &str = "You clean up dictated text. Remove filler words and \
+resolve self-corrections. Keep the speaker's words and meaning. Fix punctuation and \
+capitalization. Reply with the cleaned text only, with no commentary or quotation marks.";
+
+/// The model to rewrite with when discovery returns nothing.
+///
+/// A free plan's model list comes back empty even though this model answers, so
+/// the working default cannot depend on discovery.
+pub const DEFAULT_MODEL: &str = "gpt-6-luna";
+
 /// The models this account may use, so no model name has to be hardcoded.
-pub const MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
+///
+/// The route refuses a request that does not name the client version, so the
+/// version the request already announces is repeated as a query parameter.
+pub fn models_url() -> String {
+    format!("https://chatgpt.com/backend-api/codex/models?client_version={AGENT_VERSION}")
+}
 
 /// This route is Codex's, so the request announces the Codex client. A borrowed
 /// identity that does not match the traffic it claims to be is what the edge
@@ -44,6 +60,7 @@ pub struct Failure {
 }
 
 /// One model the account can use.
+#[derive(Debug)]
 pub struct Model {
     pub slug: String,
     pub display_name: String,
@@ -232,33 +249,33 @@ fn curl(account: &Account, url: &str, extra: &[&str]) -> Command {
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    crate::engine::hide_console(&mut command);
+    crate::console::hide_console(&mut command);
     command
 }
 
-/// The models this account may use, in the server's order.
-pub fn list_models(account: &Account) -> Result<Vec<Model>, Failure> {
-    let child = curl(account, MODELS_URL, &["--max-time", "30"])
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|error| Failure {
-            status: 0,
-            message: format!("could not start the request: {error}"),
-        })?;
-    let output = child.wait_with_output().map_err(|error| Failure {
-        status: 0,
-        message: format!("the request failed: {error}"),
-    })?;
-    let text = String::from_utf8_lossy(&output.stdout).to_string();
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| Failure {
+/// Reads a model list. A body without one is a failure, not an empty account:
+/// an expired token answers with a JSON error that parses perfectly well, and
+/// reporting that as "no models" hides the real problem.
+pub fn parse_models(body: &str) -> Result<Vec<Model>, Failure> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| Failure {
         status: 0,
         message: format!(
             "ChatGPT did not return a model list: {}",
-            text.chars().take(200).collect::<String>()
+            body.chars().take(200).collect::<String>()
         ),
     })?;
+    let Some(entries) = value.get("models").and_then(|models| models.as_array()) else {
+        let snippet: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        return Err(Failure {
+            status: 0,
+            message: format!(
+                "ChatGPT did not return a model list: {}",
+                snippet.chars().take(200).collect::<String>()
+            ),
+        });
+    };
     let mut models = Vec::new();
-    if let Some(entries) = value.get("models").and_then(|models| models.as_array()) {
+    {
         for entry in entries {
             let slug = entry.get("slug").and_then(|slug| slug.as_str());
             let Some(slug) = slug else { continue };
@@ -279,6 +296,23 @@ pub fn list_models(account: &Account) -> Result<Vec<Model>, Failure> {
         }
     }
     Ok(models)
+}
+
+/// The models this account may use, in the server's order.
+pub fn list_models(account: &Account) -> Result<Vec<Model>, Failure> {
+    let url = models_url();
+    let child = curl(account, &url, &["--max-time", "30"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| Failure {
+            status: 0,
+            message: format!("could not start the request: {error}"),
+        })?;
+    let output = child.wait_with_output().map_err(|error| Failure {
+        status: 0,
+        message: format!("the request failed: {error}"),
+    })?;
+    parse_models(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Rewrites `transcript` with `instructions`, returning only finished text.
@@ -457,6 +491,18 @@ mod tests {
         assert_eq!(status, 0);
         // The body is what the failure message is built from, so it survives.
         assert_eq!(body, vec!["{\"detail\":\"nope\"}".to_string()]);
+    }
+
+    #[test]
+    fn the_model_list_names_the_client_version_it_announces() {
+        assert!(models_url().ends_with("?client_version=0.0.1"), "{}", models_url());
+    }
+
+    #[test]
+    fn a_model_list_without_models_is_a_failure_not_an_empty_account() {
+        let failure = parse_models("{\"error\":{\"message\":\"token expired\"}}").unwrap_err();
+        assert!(failure.message.contains("token expired"), "{}", failure.message);
+        assert!(parse_models("not json").is_err());
     }
 
     #[test]
