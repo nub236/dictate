@@ -26,6 +26,13 @@ pub const DEFAULT_INSTRUCTIONS: &str = "You clean up dictated text. Remove fille
 resolve self-corrections. Keep the speaker's words and meaning. Fix punctuation and \
 capitalization. Reply with the cleaned text only, with no commentary or quotation marks.";
 
+/// How much thinking the model is allowed to do.
+///
+/// Cleanup is not a reasoning task, and on a model that supports the setting a
+/// thinking phase is the single largest cost in the response. `none` is the
+/// fastest thing the route accepts.
+const REASONING_EFFORT: &str = "none";
+
 /// The model to rewrite with when discovery returns nothing.
 ///
 /// A free plan's model list comes back empty even though this model answers, so
@@ -335,6 +342,9 @@ pub fn enhance(
         // conversation behind.
         "store": false,
         "stream": true,
+        // None of the work in a cleanup pass needs thinking, and a thinking
+        // phase is what turns a two-second rewrite into a fifteen-second one.
+        "reasoning": { "effort": REASONING_EFFORT },
     })
     .to_string();
 

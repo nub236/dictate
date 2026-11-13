@@ -137,6 +137,31 @@
       </footer>
     </section>
 
+    <!-- ---------------- personalization ---------------- -->
+    <section class="view" id="view-enhancement" hidden>
+      <h1>Personalization</h1>
+      <p class="lede">How Dictate rewrites your words in each app.</p>
+      <div class="row box">
+        <div class="grow">
+          <div class="row-title">Enhance dictation</div>
+          <div class="row-sub" id="enh-mode-sub">Loading…</div>
+        </div>
+        <button class="switch" id="enh-toggle" role="switch" aria-checked="true"
+          aria-label="Enhance dictation"></button>
+      </div>
+      <div class="enh-scroll">
+        <label class="field">
+          <span class="field-label">Global</span>
+          <textarea class="text-area" id="enh-global" rows="3" spellcheck="false"
+            placeholder="Instructions that apply to every dictation"></textarea>
+        </label>
+        <div class="mode-list" id="mode-list"></div>
+      </div>
+      <footer class="actions">
+        <button class="primary" id="btn-enh-done">Done</button>
+      </footer>
+    </section>
+
     <!-- ---------------- done ---------------- -->
     <section class="view" id="view-done" hidden>
       <h1>Ready</h1>

@@ -178,6 +178,10 @@ function show(view) {
     setTimeout(() => $("snippet-trigger").focus(), 50);
   }
 
+  if (view === "enhancement") {
+    loadEnhancement();
+  }
+
   if (view === "done") {
     $("done-hotkey").textContent = prettyHotkey(pendingHotkey);
     for (const place of document.querySelectorAll(".tray-place")) {
@@ -574,6 +578,198 @@ async function addSnippet() {
   replacement.value = "";
   await persistSnippets();
   trigger.focus();
+}
+
+/* ------------------------------------------------------------ personalization */
+
+let enhancement = null;
+let enhanceTimer = null;
+
+async function loadEnhancement() {
+  try {
+    const state = await invoke("load_enhancement");
+    enhancement = state.enhancement;
+    // The app the last dictation was started in, so a mode can claim it without
+    // the user having to know a bundle identifier.
+    enhancement.lastApp = state.last_app;
+  } catch (error) {
+    toast(String(error));
+    enhancement = null;
+  }
+  renderEnhancement();
+}
+
+// A save on every keystroke would fight the textarea for focus, so prompt edits
+// go out a moment after typing stops.
+function queueEnhancementSave() {
+  clearTimeout(enhanceTimer);
+  enhanceTimer = setTimeout(persistEnhancement, 500);
+}
+
+async function persistEnhancement() {
+  if (!enhancement) return;
+  clearTimeout(enhanceTimer);
+  const lastApp = enhancement.lastApp;
+  try {
+    enhancement = await invoke("save_enhancement", { enhancement });
+    enhancement.lastApp = lastApp;
+  } catch (error) {
+    toast(String(error));
+    await loadEnhancement();
+  }
+}
+
+function switchButton(checked, label) {
+  const button = document.createElement("button");
+  button.className = "switch";
+  button.setAttribute("role", "switch");
+  button.setAttribute("aria-checked", checked ? "true" : "false");
+  button.setAttribute("aria-label", label);
+  return button;
+}
+
+function renderEnhancement() {
+  const list = $("mode-list");
+  list.replaceChildren();
+  if (!enhancement) {
+    $("enh-mode-sub").textContent = "Could not load settings";
+    return;
+  }
+
+  $("enh-toggle").setAttribute("aria-checked", enhancement.enabled ? "true" : "false");
+  if ($("enh-global").value !== (enhancement.prompt || "")) {
+    $("enh-global").value = enhancement.prompt || "";
+  }
+  const on = enhancement.modes.filter((mode) => mode.enabled).length;
+  $("enh-mode-sub").textContent = enhancement.enabled
+    ? `${on} of ${enhancement.modes.length} modes on`
+    : "Off — transcripts are pasted as transcribed";
+
+  for (const mode of enhancement.modes) {
+    const card = document.createElement("div");
+    card.className = mode.enabled ? "mode-card" : "mode-card is-off";
+
+    const head = document.createElement("div");
+    head.className = "mode-head";
+    const name = document.createElement("span");
+    name.className = "mode-name";
+    name.textContent = mode.name;
+    const toggle = switchButton(mode.enabled, `${mode.name} mode`);
+    toggle.dataset.mode = mode.id;
+    toggle.dataset.action = "toggle-mode";
+    head.append(name, toggle);
+
+    const prompt = document.createElement("textarea");
+    prompt.className = "text-area";
+    prompt.rows = 3;
+    prompt.spellcheck = false;
+    prompt.value = mode.prompt;
+    prompt.dataset.mode = mode.id;
+    prompt.dataset.action = "prompt";
+
+    const apps = document.createElement("div");
+    apps.className = "mode-apps";
+    for (const app of mode.apps) {
+      const chip = document.createElement("span");
+      chip.className = "app-chip";
+      chip.append(document.createTextNode(app.name));
+      const remove = document.createElement("button");
+      remove.textContent = "×";
+      remove.title = `Remove ${app.name}`;
+      remove.setAttribute("aria-label", `Remove ${app.name}`);
+      remove.dataset.mode = mode.id;
+      remove.dataset.app = app.id;
+      remove.dataset.action = "remove-app";
+      chip.append(remove);
+      apps.append(chip);
+    }
+    if (mode.apps.length === 0) {
+      const none = document.createElement("span");
+      none.className = "row-sub";
+      none.textContent = "No apps yet";
+      apps.append(none);
+    }
+    const add = document.createElement("button");
+    add.className = "chip";
+    add.textContent = "+ Last app";
+    add.title = "Add the app you last dictated into";
+    add.dataset.mode = mode.id;
+    add.dataset.action = "add-app";
+    apps.append(add);
+
+    card.append(head, prompt, apps);
+    list.append(card);
+  }
+}
+
+async function addLastApp(modeId) {
+  const mode = enhancement?.modes.find((entry) => entry.id === modeId);
+  if (!mode) return;
+  let info = enhancement.lastApp;
+  if (!info) {
+    info = await invoke("last_app").catch(() => null);
+  }
+  if (!info) {
+    toast("Dictate into an app first, then add it here");
+    return;
+  }
+  if (mode.apps.some((app) => app.id === info.id)) {
+    toast(`${info.name} is already in ${mode.name}`);
+    return;
+  }
+  mode.apps.push({ id: info.id, name: info.name });
+  await persistEnhancement();
+  renderEnhancement();
+}
+
+function wireEnhancement() {
+  $("enh-toggle").addEventListener("click", async () => {
+    if (!enhancement) return;
+    enhancement.enabled = !enhancement.enabled;
+    await persistEnhancement();
+    renderEnhancement();
+  });
+
+  $("enh-global").addEventListener("input", () => {
+    if (!enhancement) return;
+    enhancement.prompt = $("enh-global").value;
+    queueEnhancementSave();
+  });
+
+  $("mode-list").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button || !enhancement) return;
+    const mode = enhancement.modes.find((entry) => entry.id === button.dataset.mode);
+    if (!mode) return;
+    if (button.dataset.action === "toggle-mode") {
+      mode.enabled = !mode.enabled;
+      persistEnhancement().then(renderEnhancement);
+    } else if (button.dataset.action === "remove-app") {
+      mode.apps = mode.apps.filter((app) => app.id !== button.dataset.app);
+      persistEnhancement().then(renderEnhancement);
+    } else if (button.dataset.action === "add-app") {
+      addLastApp(mode.id);
+    }
+  });
+
+  $("mode-list").addEventListener("input", (event) => {
+    const field = event.target.closest("textarea[data-action='prompt']");
+    if (!field || !enhancement) return;
+    const mode = enhancement.modes.find((entry) => entry.id === field.dataset.mode);
+    if (!mode) return;
+    mode.prompt = field.value;
+    queueEnhancementSave();
+  });
+
+  $("btn-enh-done").addEventListener("click", async () => {
+    clearTimeout(enhanceTimer);
+    await persistEnhancement();
+    try {
+      await invoke("complete_onboarding");
+    } catch (error) {
+      toast(String(error));
+    }
+  });
 }
 
 /* --------------------------------------------------------------------- hotkey */
@@ -1008,6 +1204,7 @@ function wire() {
     }
   });
 
+  wireEnhancement();
   attachCapture("capture", "capture-value", "capture-hint");
 
   listen("sign-in-finished", (event) => {

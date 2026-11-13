@@ -100,7 +100,7 @@ fn write_atomic(path: &PathBuf, contents: &str) -> std::io::Result<()> {
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WindowEvent, Wry};
 
@@ -120,6 +120,34 @@ tauri_nspanel::tauri_panel! {
     })
 }
 
+/// An app a mode applies to.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Target {
+    /// Bundle identifier on macOS, executable name on Windows.
+    id: String,
+    name: String,
+}
+
+impl Target {
+    fn matches(&self, app: &engine::FrontApp) -> bool {
+        (!self.id.is_empty() && self.id.to_lowercase() == app.id.to_lowercase())
+            || (!self.name.is_empty() && self.name.to_lowercase() == app.name.to_lowercase())
+    }
+}
+
+/// A kind of writing, and the apps it applies to.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Mode {
+    id: String,
+    name: String,
+    /// Off means this mode never applies, whatever app is in front.
+    #[serde(default = "default_true")]
+    enabled: bool,
+    prompt: String,
+    #[serde(default)]
+    apps: Vec<Target>,
+}
+
 /// The rewrite applied to each transcript before it is pasted.
 ///
 /// On by default, because a failed rewrite can never cost the dictation: the
@@ -132,9 +160,13 @@ struct Enhancement {
     /// free plan, so a model that answers is kept here.
     #[serde(default = "default_enhance_model")]
     model: String,
-    /// What the rewrite is told to do. Empty means the built-in cleanup pass.
+    /// Instructions that apply to every dictation. Empty means the built-in
+    /// cleanup pass.
     #[serde(default)]
     prompt: String,
+    /// Per-kind instructions, chosen by the app in front.
+    #[serde(default = "default_modes")]
+    modes: Vec<Mode>,
 }
 
 impl Default for Enhancement {
@@ -143,12 +175,88 @@ impl Default for Enhancement {
             enabled: true,
             model: default_enhance_model(),
             prompt: String::new(),
+            modes: default_modes(),
         }
     }
 }
 
 fn default_enhance_model() -> String {
     enhance::DEFAULT_MODEL.to_string()
+}
+
+fn default_modes() -> Vec<Mode> {
+    let target = |id: &str, name: &str| Target {
+        id: id.to_string(),
+        name: name.to_string(),
+    };
+    vec![
+        Mode {
+            id: "messaging".into(),
+            name: "Messaging".into(),
+            enabled: true,
+            prompt: "Write this as a chat message: no greeting and no sign-off, light \
+                     punctuation, and keep it short. Do not add anything the speaker did not say."
+                .into(),
+            apps: vec![
+                target("com.tinyspeck.slackmacgap", "Slack"),
+                target("com.apple.MobileSMS", "Messages"),
+                target("net.whatsapp.WhatsApp", "WhatsApp"),
+                target("com.hnc.Discord", "Discord"),
+            ],
+        },
+        Mode {
+            id: "email".into(),
+            name: "Email".into(),
+            enabled: true,
+            prompt: "Write this as an email: complete sentences, a paragraph wherever the \
+                     speaker changed subject, and a greeting only if one was spoken. Never invent \
+                     names, dates or details."
+                .into(),
+            apps: vec![
+                target("com.apple.mail", "Mail"),
+                target("com.microsoft.Outlook", "Outlook"),
+                target("com.readdle.smartemail-Mac", "Spark"),
+                target("com.superhuman.Superhuman", "Superhuman"),
+            ],
+        },
+        Mode {
+            id: "notes".into(),
+            name: "Notes".into(),
+            enabled: true,
+            prompt: "Write this as notes: keep every point the speaker made, one per line where \
+                     they naturally separate, and drop conversational filler."
+                .into(),
+            apps: vec![
+                target("com.apple.Notes", "Notes"),
+                target("md.obsidian", "Obsidian"),
+                target("notion.id", "Notion"),
+                target("com.apple.TextEdit", "TextEdit"),
+            ],
+        },
+        Mode {
+            id: "coding".into(),
+            name: "Coding".into(),
+            enabled: true,
+            prompt: "Clean this up for a developer: keep technical terms, identifiers, file names \
+                     and symbols exactly as spoken, and fix only punctuation and capitalization."
+                .into(),
+            apps: vec![
+                target("com.apple.dt.Xcode", "Xcode"),
+                target("com.microsoft.VSCode", "Visual Studio Code"),
+                target("dev.zed.Zed", "Zed"),
+                target("com.apple.Terminal", "Terminal"),
+                target("com.googlecode.iterm2", "iTerm"),
+            ],
+        },
+    ]
+}
+
+/// The first enabled mode that claims this app.
+fn mode_for<'a>(modes: &'a [Mode], app: Option<&engine::FrontApp>) -> Option<&'a Mode> {
+    let app = app?;
+    modes
+        .iter()
+        .find(|mode| mode.enabled && mode.apps.iter().any(|target| target.matches(app)))
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -208,6 +316,8 @@ struct AppState {
     history: Mutex<Vec<Value>>,
     recording: Mutex<Option<Recording>>,
     busy: Mutex<bool>,
+    /// The app the recording started in, kept for the mode and for the page.
+    last_app: Mutex<Option<engine::FrontApp>>,
     hotkey_service: Mutex<Option<HotkeyService>>,
     tap_sender: Mutex<Option<mpsc::Sender<HotkeySignal>>>,
     hotkey_error: Mutex<Option<String>>,
@@ -529,21 +639,8 @@ fn build_menu(app: &AppHandle, history: &[Value]) -> tauri::Result<Menu<Wry>> {
     let history_menu = Submenu::with_items(app, "History", true, &refs)?;
     let keywords_item = MenuItem::with_id(app, "keywords", "Keywords", true, None::<&str>)?;
     let snippets_item = MenuItem::with_id(app, "snippets", "Snippets", true, None::<&str>)?;
-    let enhance_on = app
-        .state::<AppState>()
-        .config
-        .lock()
-        .unwrap()
-        .enhancement
-        .enabled;
-    let enhance_item = CheckMenuItem::with_id(
-        app,
-        "enhance",
-        "Enhance Transcript",
-        true,
-        enhance_on,
-        None::<&str>,
-    )?;
+    let personalize_item =
+        MenuItem::with_id(app, "personalization", "Personalization", true, None::<&str>)?;
     // Lands on the account screen rather than the welcome tour: sign out and the
     // permission states are the only things this needs to reach after setup.
     let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
@@ -556,7 +653,7 @@ fn build_menu(app: &AppHandle, history: &[Value]) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &keywords_item,
             &snippets_item,
-            &enhance_item,
+            &personalize_item,
             &settings_item,
             &PredefinedMenuItem::separator(app)?,
             &quit,
@@ -712,17 +809,29 @@ fn prompt_for(enhancement: &Enhancement) -> String {
 /// unchanged on every failure, and the reason goes to the log rather than to the
 /// user, who is about to paste either way.
 fn enhance_transcript(state: &AppState, transcript: &str) -> String {
-    let (enabled, model, instructions) = {
+    let app = state.last_app.lock().unwrap().clone();
+    let (enabled, model, global, mode) = {
         let config = state.config.lock().unwrap();
         (
             config.enhancement.enabled,
             config.enhancement.model.clone(),
             prompt_for(&config.enhancement),
+            mode_for(&config.enhancement.modes, app.as_ref())
+                .map(|mode| (mode.name.clone(), mode.prompt.clone())),
         )
     };
     if !enabled {
         return transcript.to_string();
     }
+    let instructions = enhance::compose_instructions(
+        &global,
+        mode.as_ref().map(|(_, prompt)| prompt.as_str()),
+        app.as_ref().map(|app| app.name.as_str()),
+    );
+    let label = mode
+        .as_ref()
+        .map(|(name, _)| name.as_str())
+        .unwrap_or("global");
     let credentials = match auth::valid(&state.auth_file) {
         Ok(credentials) => credentials,
         Err(error) => {
@@ -738,7 +847,7 @@ fn enhance_transcript(state: &AppState, transcript: &str) -> String {
     match enhance::enhance(&account, &model, &instructions, transcript) {
         Ok(text) => {
             debug_log(&format!(
-                "enhance: ok in {}ms, {} chars -> {} chars ({model})",
+                "enhance: ok in {}ms, {} chars -> {} chars ({model}, {label})",
                 started.elapsed().as_millis(),
                 transcript.chars().count(),
                 text.chars().count()
@@ -789,6 +898,9 @@ fn handle_toggle(app: &AppHandle) {
 
     let existing = state.recording.lock().unwrap().take();
     let Some(recording) = existing else {
+        // Sampled here, at the start: the pill does not take focus, so this is
+        // the app the words are meant for.
+        let target = engine::front_app();
         let meter = app.clone();
         // One line per dictation is enough to tell a quiet room from a mic that
         // is delivering nothing at all.
@@ -801,9 +913,14 @@ fn handle_toggle(app: &AppHandle) {
         }) {
             Ok(recording) => {
                 debug_log(&format!(
-                    "recording: started (microphone: {})",
-                    recording.device()
+                    "recording: started (microphone: {}, app: {})",
+                    recording.device(),
+                    target
+                        .as_ref()
+                        .map(|app| app.name.as_str())
+                        .unwrap_or("unknown")
                 ));
+                *state.last_app.lock().unwrap() = target;
                 *state.recording.lock().unwrap() = Some(recording);
                 set_cancel_armed(app, true);
                 show_pill(app, "listening");
@@ -971,6 +1088,48 @@ fn debug_log_command(message: String) {
 fn set_testing(value: bool) {
     TESTING.store(value, Ordering::SeqCst);
     debug_log(&format!("testing flag: {value}"));
+}
+
+/// What the Personalization page shows.
+#[tauri::command]
+fn load_enhancement(app: AppHandle) -> Value {
+    let state = app.state::<AppState>();
+    let enhancement = state.config.lock().unwrap().enhancement.clone();
+    let last = state.last_app.lock().unwrap().clone();
+    json!({
+        "enhancement": enhancement,
+        "last_app": last.map(|app| json!({ "id": app.id, "name": app.name })),
+    })
+}
+
+/// Saves the page.
+///
+/// The stored value comes back so the page renders what was actually written,
+/// not what it hoped was written.
+#[tauri::command]
+fn save_enhancement(app: AppHandle, enhancement: Value) -> Result<Value, String> {
+    let parsed: Enhancement = serde_json::from_value(enhancement)
+        .map_err(|error| format!("Could not save personalization: {error}"))?;
+    let state = app.state::<AppState>();
+    let config = {
+        let mut config = state.config.lock().unwrap();
+        config.enhancement = parsed;
+        config.clone()
+    };
+    save_config(&state.dir, &config)?;
+    Ok(serde_json::to_value(&config.enhancement).unwrap_or(Value::Null))
+}
+
+/// The app the last dictation was started in, so the page can offer to add it to
+/// a mode without asking the user for a bundle identifier.
+#[tauri::command]
+fn last_app(app: AppHandle) -> Value {
+    let state = app.state::<AppState>();
+    let last = state.last_app.lock().unwrap().clone();
+    match last {
+        Some(app) => json!({ "id": app.id, "name": app.name }),
+        None => Value::Null,
+    }
 }
 
 /// Toggles a recording from inside the app's own window.
@@ -1387,6 +1546,7 @@ fn main() {
             history: Mutex::new(history),
             recording: Mutex::new(None),
             busy: Mutex::new(false),
+            last_app: Mutex::new(None),
             hotkey_service: Mutex::new(None),
             tap_sender: Mutex::new(Some(tap_sender)),
             hotkey_error: Mutex::new(None),
@@ -1398,6 +1558,9 @@ fn main() {
             set_keywords,
             get_snippets,
             set_snippets,
+            load_enhancement,
+            save_enhancement,
+            last_app,
             sign_in,
             sign_out,
             reopen_sign_in,
@@ -1445,35 +1608,7 @@ fn main() {
                         stop_hotkey(app);
                         app.exit(0);
                     }
-                    "enhance" => {
-                        let state = app.state::<AppState>();
-                        let mut config = state.config.lock().unwrap().clone();
-                        config.enhancement.enabled = !config.enhancement.enabled;
-                        let enabled = config.enhancement.enabled;
-                        *state.config.lock().unwrap() = config.clone();
-                        if let Err(error) = save_config(&state.dir, &config) {
-                            debug_log(&format!("enhance: could not save ({error})"));
-                        }
-                        debug_log(&format!(
-                            "enhance: {}",
-                            if enabled { "on" } else { "off" }
-                        ));
-                        toast(
-                            app,
-                            if enabled {
-                                "Enhancement on"
-                            } else {
-                                "Enhancement off"
-                            },
-                        );
-                        // Rebuilding the menu from inside its own click handler
-                        // is unreliable on macOS; let the menu close first.
-                        let handle = app.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(200));
-                            refresh_tray(&handle);
-                        });
-                    }
+                    "personalization" => show_window(app, "enhancement"),
                     "settings" => show_window(app, "signin"),
                     "keywords" => show_window(app, "keywords"),
                     "snippets" => show_window(app, "snippets"),

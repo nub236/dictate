@@ -59,6 +59,42 @@ pub enum HotkeySignal {
 /// The operating system this build runs on, as the UI spells it.
 pub const PLATFORM: &str = std::env::consts::OS;
 
+/// The app the user is dictating into.
+#[derive(Clone, Debug)]
+pub struct FrontApp {
+    /// Bundle identifier on macOS, executable name on Windows.
+    pub id: String,
+    pub name: String,
+}
+
+/// Samples the app in front.
+///
+/// Only the app's identity is read: no window title, no page content, nothing
+/// the user typed. A title would carry document names and email subjects, which
+/// is exactly the kind of thing that should never leave the machine.
+#[cfg(target_os = "macos")]
+pub fn front_app() -> Option<FrontApp> {
+    use objc2_app_kit::NSWorkspace;
+    let workspace = NSWorkspace::sharedWorkspace();
+    let app = workspace.frontmostApplication()?;
+    let id = app.bundleIdentifier()?.to_string();
+    let name = app.localizedName()
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| id.clone());
+    // Dictate's own window is never a dictation target.
+    if id == "dev.dictate.mic" {
+        return None;
+    }
+    Some(FrontApp { id, name })
+}
+
+/// Windows needs a foreground-window query that is not written yet, so every
+/// dictation there uses the Global prompt alone.
+#[cfg(not(target_os = "macos"))]
+pub fn front_app() -> Option<FrontApp> {
+    None
+}
+
 /// Where to send the user when a grant is missing. Only macOS has a per-app
 /// list to visit; Windows and Linux just have a microphone switch.
 pub const ACCESSIBILITY_HINT: &str = if cfg!(target_os = "macos") {

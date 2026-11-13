@@ -57,6 +57,9 @@ tauri-plugin-autostart = "2"
 # behaviour says; the class has to be NSPanel. Same crate Handy's overlay uses.
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat", "block2", "std"] }
+# Reading which app is in front, so a dictation can pick the mode that fits it.
+# No permission is needed for this, and only the app's identity is read.
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
 block2 = { version = "0.6", features = ["alloc"] }
 objc2 = "0.6"
 # Same accessibility prompt Handy uses; registers the app in the Accessibility
