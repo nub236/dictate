@@ -448,47 +448,59 @@ fn load_config(dir: &Path) -> Config {
     config
 }
 
-/// The Coding presets this app shipped before the AI tools replaced them.
+/// Editors this build no longer ships.
 ///
-/// Used only to recognise a save that was never edited: replacing an untouched
-/// preset is a fix, and replacing a customised one would throw work away.
-const LEGACY_CODE_TARGETS: &[(&str, &str)] = &[
+/// They are removed by id rather than by comparing the whole list, so the change
+/// reaches a save whatever shape it is in, and nothing the user added is touched.
+/// Both spellings of each id are listed: an early build wrote the bare macOS
+/// identifiers, and the one after it put the Windows alternative after a pipe.
+const RETIRED_CODE_TARGETS: &[(&str, &str)] = &[
     ("app", "com.apple.dt.Xcode"),
+    ("app", "com.microsoft.VSCode"),
     ("app", "com.microsoft.VSCode|code"),
+    ("app", "dev.zed.Zed"),
     ("app", "dev.zed.Zed|zed"),
-    ("app", "com.apple.Terminal|WindowsTerminal|wt"),
-    ("app", "com.googlecode.iterm2"),
-    ("site", "github"),
-    ("site", "gitlab"),
-    ("site", "stackoverflow"),
 ];
 
 /// Brings a saved configuration up to what this build expects.
 ///
-/// A saved `modes` list is the user's, so serde defaults never touch it: without
-/// this, a config written by an older build keeps its old modes forever. Only a
-/// missing row is added and only an untouched preset is replaced.
+/// A saved `modes` list is the user's, and serde defaults never touch a key that
+/// is present, so without this a config written by an older build keeps its old
+/// modes forever. Only a missing row is added, retired presets are removed, and
+/// the current presets are added where they are not already there.
 fn migrate(cleanup: &mut Cleanup) {
     let defaults = default_modes();
     if !cleanup.modes.iter().any(|mode| mode.id == "general") {
         if let Some(general) = defaults.iter().find(|mode| mode.id == "general") {
             cleanup.modes.push(general.clone());
+            debug_log("cleanup: added the Other apps row");
         }
     }
-    if let Some(mode) = cleanup.modes.iter_mut().find(|mode| mode.id == "code") {
-        // Two shapes shipped before: the five apps, and the same five with the
-        // three sites. Anything else has been edited by hand.
-        let untouched = matches!(mode.targets.len(), 5 | 8)
-            && mode.targets.iter().all(|target| {
-                LEGACY_CODE_TARGETS
-                    .iter()
-                    .any(|(kind, id)| target.kind == *kind && target.id == *id)
-            });
-        if untouched {
-            if let Some(replacement) = defaults.iter().find(|mode| mode.id == "code") {
-                mode.targets = replacement.targets.clone();
-            }
+    let Some(default_code) = defaults.iter().find(|mode| mode.id == "code") else {
+        return;
+    };
+    let Some(mode) = cleanup.modes.iter_mut().find(|mode| mode.id == "code") else {
+        return;
+    };
+    let before = mode.targets.len();
+    mode.targets.retain(|target| {
+        !RETIRED_CODE_TARGETS
+            .iter()
+            .any(|(kind, id)| target.kind == *kind && target.id == *id)
+    });
+    let mut changed = mode.targets.len() != before;
+    for target in &default_code.targets {
+        if !mode
+            .targets
+            .iter()
+            .any(|existing| existing.kind == target.kind && existing.id == target.id)
+        {
+            mode.targets.push(target.clone());
+            changed = true;
         }
+    }
+    if changed {
+        debug_log("cleanup: Coding presets updated");
     }
 }
 
@@ -1995,14 +2007,25 @@ mod config_tests {
         cleanup.modes.retain(|mode| mode.id != "general");
         for mode in cleanup.modes.iter_mut() {
             if mode.id == "code" {
-                mode.targets = LEGACY_CODE_TARGETS
-                    .iter()
-                    .map(|(kind, id)| Target {
-                        kind: kind.to_string(),
-                        id: id.to_string(),
-                        name: id.to_string(),
-                    })
-                    .collect();
+                // The second shape that shipped: the five apps with the Windows
+                // alternatives after a pipe, plus the three sites.
+                mode.targets = [
+                    ("app", "com.apple.dt.Xcode", "Xcode"),
+                    ("app", "com.microsoft.VSCode|code", "VS Code"),
+                    ("app", "dev.zed.Zed|zed", "Zed"),
+                    ("app", "com.apple.Terminal|WindowsTerminal|wt", "Terminal"),
+                    ("app", "com.googlecode.iterm2", "iTerm"),
+                    ("site", "github", "github"),
+                    ("site", "gitlab", "gitlab"),
+                    ("site", "stackoverflow", "stackoverflow"),
+                ]
+                .iter()
+                .map(|(kind, id, name)| Target {
+                    kind: kind.to_string(),
+                    id: id.to_string(),
+                    name: name.to_string(),
+                })
+                .collect();
             }
         }
         migrate(&mut cleanup);
@@ -2012,27 +2035,38 @@ mod config_tests {
         assert!(!code.targets.iter().any(|target| target.name.contains("Xcode")));
     }
 
+    /// The exact five targets an early build saved, ids and all: the bare macOS
+    /// identifiers with no Windows alternative after a pipe.
     #[test]
     fn the_five_app_coding_mode_of_the_first_build_is_migrated_too() {
         let mut cleanup = Cleanup::default();
         cleanup.modes.retain(|mode| mode.id != "general");
         for mode in cleanup.modes.iter_mut() {
             if mode.id == "code" {
-                mode.targets = LEGACY_CODE_TARGETS
-                    .iter()
-                    .filter(|(kind, _)| *kind == "app")
-                    .map(|(kind, id)| Target {
-                        kind: kind.to_string(),
-                        id: id.to_string(),
-                        name: id.to_string(),
-                    })
-                    .collect();
+                mode.targets = [
+                    ("app", "com.apple.dt.Xcode", "Xcode"),
+                    ("app", "com.microsoft.VSCode", "Visual Studio Code"),
+                    ("app", "dev.zed.Zed", "Zed"),
+                    ("app", "com.apple.Terminal", "Terminal"),
+                    ("app", "com.googlecode.iterm2", "iTerm"),
+                ]
+                .iter()
+                .map(|(kind, id, name)| Target {
+                    kind: kind.to_string(),
+                    id: id.to_string(),
+                    name: name.to_string(),
+                })
+                .collect();
             }
         }
         migrate(&mut cleanup);
         let code = cleanup.modes.iter().find(|mode| mode.id == "code").unwrap();
-        assert!(code.targets.iter().any(|target| target.name == "Terminal"));
-        assert!(!code.targets.iter().any(|target| target.name.contains("Zed")));
+        assert!(code.targets.iter().any(|target| target.name == "Claude"));
+        assert!(!code.targets.iter().any(|target| target.name == "Zed"));
+        assert!(!code
+            .targets
+            .iter()
+            .any(|target| target.name == "Visual Studio Code"));
     }
 
     #[test]
