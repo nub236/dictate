@@ -785,16 +785,10 @@ function modeCard(mode) {
 function renderCleanup() {
   const list = $("mode-list");
   list.replaceChildren();
-  if (!cleanup) {
-    $("cleanup-sub").textContent = "Could not load settings";
-    return;
-  }
+  if (!cleanup) return;
 
   const on = Boolean(cleanup.enabled);
   $("cleanup-toggle").setAttribute("aria-checked", on ? "true" : "false");
-  $("cleanup-sub").textContent = on
-    ? "On"
-    : "Off — text is pasted exactly as transcribed";
   $("level-hint").textContent = LEVEL_HINTS[cleanup.edit_level] || LEVEL_HINTS.balanced;
   for (const button of $("level-group").querySelectorAll("button")) {
     button.setAttribute(

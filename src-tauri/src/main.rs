@@ -462,6 +462,20 @@ const RETIRED_CODE_TARGETS: &[(&str, &str)] = &[
     ("app", "dev.zed.Zed|zed"),
 ];
 
+/// True when two rules point at the same app.
+///
+/// An id is a set of alternatives (`com.apple.Terminal|WindowsTerminal|wt`), and
+/// an older build saved the bare macOS one. Comparing whole strings would count
+/// the same app twice, so the alternatives are compared instead.
+fn same_app(left: &Target, right: &Target) -> bool {
+    left.kind == right.kind
+        && left.alternatives().any(|one| {
+            right
+                .alternatives()
+                .any(|other| one.eq_ignore_ascii_case(other))
+        })
+}
+
 /// Brings a saved configuration up to what this build expects.
 ///
 /// A saved `modes` list is the user's, and serde defaults never touch a key that
@@ -479,9 +493,18 @@ fn migrate(cleanup: &mut Cleanup) {
     let Some(default_code) = defaults.iter().find(|mode| mode.id == "code") else {
         return;
     };
-    let Some(mode) = cleanup.modes.iter_mut().find(|mode| mode.id == "code") else {
+    // An early build named this mode "coding" while every lookup here uses the
+    // id, so the row is found by either and then renamed to the id everything
+    // else expects. Without this the mode silently fell back to the General
+    // prompt as well as keeping its old apps.
+    let Some(mode) = cleanup
+        .modes
+        .iter_mut()
+        .find(|mode| mode.id == "code" || mode.id == "coding")
+    else {
         return;
     };
+    mode.id = "code".into();
     let before = mode.targets.len();
     mode.targets.retain(|target| {
         !RETIRED_CODE_TARGETS
@@ -490,17 +513,41 @@ fn migrate(cleanup: &mut Cleanup) {
     });
     let mut changed = mode.targets.len() != before;
     for target in &default_code.targets {
-        if !mode
-            .targets
-            .iter()
-            .any(|existing| existing.kind == target.kind && existing.id == target.id)
-        {
+        if !mode.targets.iter().any(|existing| same_app(existing, target)) {
             mode.targets.push(target.clone());
             changed = true;
         }
     }
+    // One app may be saved twice by now: once under a bare id and once under the
+    // id this build ships. Collapsing keeps the wider id, which is what matches
+    // on Windows as well.
+    let mut unique: Vec<Target> = Vec::new();
+    for target in std::mem::take(&mut mode.targets) {
+        if let Some(existing) = unique.iter_mut().find(|existing| same_app(existing, &target)) {
+            if target.id.len() > existing.id.len() {
+                existing.id = target.id.clone();
+            }
+            changed = true;
+            continue;
+        }
+        unique.push(target);
+    }
+    for existing in unique.iter_mut() {
+        if let Some(shipped) = default_code
+            .targets
+            .iter()
+            .find(|shipped| same_app(shipped, existing))
+        {
+            if existing.id != shipped.id {
+                existing.id = shipped.id.clone();
+                changed = true;
+            }
+        }
+    }
+    mode.targets = unique;
     if changed {
-        debug_log("cleanup: Coding presets updated");
+        let names: Vec<&str> = mode.targets.iter().map(|target| target.name.as_str()).collect();
+        debug_log(&format!("cleanup: Coding presets updated ({})", names.join(", ")));
     }
 }
 
@@ -2067,6 +2114,59 @@ mod config_tests {
             .targets
             .iter()
             .any(|target| target.name == "Visual Studio Code"));
+    }
+
+    /// A save from the first build calls the mode "coding". Every lookup uses
+    /// the id, so the row has to be found by either and renamed.
+    #[test]
+    fn an_app_saved_twice_under_two_spellings_of_its_id_is_collapsed() {
+        let mut cleanup = Cleanup::default();
+        for mode in cleanup.modes.iter_mut() {
+            if mode.id == "code" {
+                mode.targets.push(Target {
+                    kind: "app".into(),
+                    id: "com.apple.Terminal".into(),
+                    name: "Terminal".into(),
+                });
+            }
+        }
+        migrate(&mut cleanup);
+        let code = cleanup.modes.iter().find(|mode| mode.id == "code").unwrap();
+        let terminals = code
+            .targets
+            .iter()
+            .filter(|target| target.name == "Terminal")
+            .count();
+        assert_eq!(terminals, 1, "{:?}", code.targets);
+        // The wider id is the one kept, so the Windows name still matches.
+        assert!(code
+            .targets
+            .iter()
+            .any(|target| target.name == "Terminal" && target.id.contains('|')));
+    }
+
+    #[test]
+    fn a_mode_saved_as_coding_is_found_and_renamed() {
+        let mut cleanup = Cleanup::default();
+        for mode in cleanup.modes.iter_mut() {
+            if mode.id == "code" {
+                mode.id = "coding".into();
+                mode.targets = vec![Target {
+                    kind: "app".into(),
+                    id: "com.apple.dt.Xcode".into(),
+                    name: "Xcode".into(),
+                }];
+            }
+        }
+        migrate(&mut cleanup);
+        let code = cleanup
+            .modes
+            .iter()
+            .find(|mode| mode.id == "code")
+            .expect("the mode is renamed");
+        assert!(code.targets.iter().any(|target| target.name == "Claude"));
+        assert!(!code.targets.iter().any(|target| target.name == "Xcode"));
+        assert!(!cleanup.modes.iter().any(|mode| mode.id == "coding"));
     }
 
     #[test]

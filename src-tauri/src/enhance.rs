@@ -61,7 +61,10 @@ pub fn mode_prompt(id: &str) -> &'static str {
         "messaging" => MODE_MESSAGING,
         "email" => MODE_EMAIL,
         "notes" => MODE_NOTES,
-        "code" => MODE_CODE,
+        // "coding" is what an early build saved. The id is migrated on load, but
+        // a prompt that silently became the General one is too quiet a bug to
+        // leave to a single line of defence.
+        "code" | "coding" => MODE_CODE,
         _ => MODE_GENERAL,
     }
 }
@@ -610,6 +613,13 @@ mod tests {
         let failure = parse_models("{\"error\":{\"message\":\"token expired\"}}").unwrap_err();
         assert!(failure.message.contains("token expired"), "{}", failure.message);
         assert!(parse_models("not json").is_err());
+    }
+
+    #[test]
+    fn both_spellings_of_the_coding_mode_get_the_code_prompt() {
+        assert_eq!(mode_prompt("code"), MODE_CODE);
+        assert_eq!(mode_prompt("coding"), MODE_CODE);
+        assert_eq!(mode_prompt("nonsense"), MODE_GENERAL);
     }
 
     #[test]
