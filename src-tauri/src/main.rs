@@ -298,7 +298,7 @@ fn default_modes() -> Vec<Mode> {
         },
         Mode {
             id: "code".into(),
-            name: "Code".into(),
+            name: "Coding".into(),
             enabled: true,
             tone: "neutral".into(),
             targets: vec![

@@ -588,15 +588,42 @@ const LEVEL_HINTS = {
   polished: "May smooth awkward phrasing, keeping every point.",
 };
 
-// Register is per mode: Slack should not read like an email.
-const TONES = [
+// One messy sample, three ways. The level decides how much changes and the tone
+// decides how it reads: local and instant, so every dial moves something visible
+// without spending a request.
+const SAMPLE =
+  "um so like i wanted to, no, i need to move the meeting to friday at 2, uh, and can you send the deck";
+
+const PREVIEW = {
+  light: {
+    casual: "I need to move the meeting to Friday at 2, and can you send the deck?",
+    neutral: "I need to move the meeting to Friday at 2, and can you send the deck?",
+    formal: "I need to move the meeting to Friday at 2. Could you please send the deck?",
+  },
+  balanced: {
+    casual: "I need to move the meeting to Friday at 2. Can you send the deck?",
+    neutral: "I need to move the meeting to Friday at 2. Can you send the deck?",
+    formal: "I need to move the meeting to Friday at 2. Could you please send the deck?",
+  },
+  polished: {
+    casual: "Can we push the meeting to Friday at 2? And send the deck?",
+    neutral: "Let's move the meeting to Friday at 2. Could you send the deck?",
+    formal: "I would like to move the meeting to Friday at 2. Could you please send the deck?",
+  },
+};
+
+// Off is a tone here, not a second switch: a mode nobody wants needs one control,
+// and the row stays in the list where it can be found again.
+const TONE_OPTIONS = [
   ["casual", "Casual"],
   ["neutral", "Neutral"],
   ["formal", "Formal"],
+  ["off", "Off"],
 ];
 
 let cleanup = null;
 let cleanupTimer = null;
+let expandedMode = null;
 
 async function loadCleanup() {
   try {
@@ -634,43 +661,164 @@ async function persistCleanup(render = false) {
   if (render) renderCleanup();
 }
 
-function switchButton(checked, label, modeId) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "switch";
-  button.setAttribute("role", "switch");
-  button.setAttribute("aria-checked", checked ? "true" : "false");
-  button.setAttribute("aria-label", label);
-  button.dataset.action = "toggle-mode";
-  button.dataset.mode = modeId;
-  return button;
+function brand(value) {
+  return String(value || "").split(".")[0].toLowerCase();
 }
 
-function segmented(options, current, modeId) {
-  const group = document.createElement("div");
-  group.className = "segmented small";
-  for (const [value, label] of options) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = label;
-    button.dataset.action = "tone";
-    button.dataset.mode = modeId;
-    button.dataset.value = value;
-    button.setAttribute("aria-pressed", value === current ? "true" : "false");
-    group.append(button);
+function targetMatches(target, info) {
+  if (!info) return false;
+  if (target.kind === "site") {
+    const site = brand(info.site);
+    return Boolean(site) && brand(target.id) === site;
   }
-  return group;
+  const id = String(info.id || "").toLowerCase();
+  const name = String(info.name || "").toLowerCase();
+  return String(target.id)
+    .split("|")
+    .map((part) => part.trim().toLowerCase())
+    .some((candidate) => candidate && (candidate === id || candidate === name));
+}
+
+// The same order the app uses: a site rule, then an app rule, then General.
+function activeMode() {
+  if (!cleanup) return null;
+  const info = cleanup.lastApp;
+  const modes = cleanup.modes.filter((mode) => mode.enabled && mode.id !== "general");
+  if (info) {
+    const site = modes.find((mode) =>
+      mode.targets.some((target) => target.kind === "site" && targetMatches(target, info)),
+    );
+    if (site) return site;
+    const app = modes.find((mode) =>
+      mode.targets.some((target) => target.kind !== "site" && targetMatches(target, info)),
+    );
+    if (app) return app;
+  }
+  return cleanup.modes.find((mode) => mode.id === "general") || null;
+}
+
+function toneOf(mode) {
+  if (!mode) return "neutral";
+  return mode.enabled ? mode.tone : "off";
+}
+
+function renderPreview() {
+  const mode = activeMode();
+  const level = cleanup?.edit_level || "balanced";
+  const tone = toneOf(mode);
+  const outputs = PREVIEW[level] || PREVIEW.balanced;
+  $("preview-said").textContent = `“${SAMPLE}”`;
+  $("preview-got").textContent = outputs[tone === "off" ? "neutral" : tone] || outputs.neutral;
+}
+
+function modeSummary(mode) {
+  // A mode can hold the same name twice (the app and the website), so the
+  // summary counts what the row is claiming, not how many rules it took.
+  const seen = new Set();
+  const names = [];
+  for (const target of mode.targets) {
+    const key = String(target.name).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(target.name);
+  }
+  if (names.length === 0) return "No apps or sites yet";
+  const shown = names.slice(0, 2).join(", ");
+  return names.length > 2 ? `${shown} +${names.length - 2}` : shown;
+}
+
+function toneSelect(mode) {
+  const select = document.createElement("select");
+  select.className = "tone";
+  select.dataset.action = "tone";
+  select.dataset.mode = mode.id;
+  select.setAttribute("aria-label", `${mode.name} tone`);
+  for (const [value, label] of TONE_OPTIONS) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    select.append(option);
+  }
+  select.value = toneOf(mode);
+  return select;
+}
+
+function modeRow(mode) {
+  const fallback = mode.id === "general";
+  const row = document.createElement("div");
+  row.className = "group-row";
+
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "row-main";
+  main.dataset.action = fallback ? "nothing" : "expand";
+  main.dataset.mode = mode.id;
+  main.setAttribute("aria-expanded", String(!fallback && expandedMode === mode.id));
+
+  const name = document.createElement("span");
+  name.className = "row-name";
+  name.textContent = mode.name;
+  const summary = document.createElement("span");
+  summary.className = "row-apps";
+  summary.textContent = fallback ? "Used when nothing else matches" : modeSummary(mode);
+  main.append(name, summary);
+  if (!fallback) {
+    const chevron = document.createElement("span");
+    chevron.className = "chevron";
+    chevron.textContent = "›";
+    main.append(chevron);
+  }
+
+  // The select carries no arrow of its own once the native one is turned off,
+  // so the wrapper draws it: a chip with no caret does not read as a menu.
+  const toneField = document.createElement("span");
+  toneField.className = "tone-field";
+  toneField.append(toneSelect(mode));
+  row.append(main, toneField);
+
+  const fragment = document.createDocumentFragment();
+  fragment.append(row);
+  if (fallback || expandedMode !== mode.id) return fragment;
+
+  const detail = document.createElement("div");
+  detail.className = "group-detail";
+  if (mode.targets.length === 0) {
+    const none = document.createElement("span");
+    none.className = "row-sub";
+    none.textContent = "No apps or sites yet. Use Add current app below.";
+    detail.append(none);
+  }
+  for (const [index, target] of mode.targets.entries()) {
+    const chip = document.createElement("span");
+    chip.className = "app-chip";
+    chip.title = target.kind === "site" ? "Website" : "App";
+    chip.append(document.createTextNode(target.kind === "site" ? `${target.name} ↗` : target.name));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${target.name}`);
+    remove.dataset.action = "remove-target";
+    remove.dataset.mode = mode.id;
+    remove.dataset.index = String(index);
+    chip.append(remove);
+    detail.append(chip);
+  }
+  fragment.append(detail);
+  return fragment;
 }
 
 function renderCleanup() {
-  const list = $("mode-list");
-  list.replaceChildren();
+  const group = $("mode-group");
+  group.replaceChildren();
   if (!cleanup) {
     $("cleanup-sub").textContent = "Could not load settings";
     return;
   }
 
   $("cleanup-toggle").setAttribute("aria-checked", cleanup.enabled ? "true" : "false");
+  $("cleanup-sub").textContent = cleanup.enabled
+    ? "Tidies each transcript before pasting."
+    : "Off — text is pasted exactly as transcribed";
   $("level-hint").textContent = LEVEL_HINTS[cleanup.edit_level] || LEVEL_HINTS.balanced;
   for (const button of $("level-group").querySelectorAll("button")) {
     button.setAttribute(
@@ -678,73 +826,16 @@ function renderCleanup() {
       button.dataset.level === cleanup.edit_level ? "true" : "false",
     );
   }
+  for (const mode of cleanup.modes) {
+    group.append(modeRow(mode));
+  }
+  $("mode-picker").hidden = true;
+  $("btn-add-current").textContent = "+ Add current app";
   if ($("cleanup-custom").value !== (cleanup.instructions || "")) {
     $("cleanup-custom").value = cleanup.instructions || "";
   }
-  const on = cleanup.modes.filter((mode) => mode.enabled).length;
-  $("cleanup-sub").textContent = cleanup.enabled
-    ? `${on} of ${cleanup.modes.length} modes on`
-    : "Off — text is pasted exactly as transcribed";
-
-  for (const mode of cleanup.modes) {
-    list.append(modeCard(mode));
-  }
+  renderPreview();
   syncPromptModes();
-}
-
-function modeCard(mode) {
-  const card = document.createElement("div");
-  const fallback = mode.id === "general";
-  card.className = mode.enabled ? "mode-card" : "mode-card is-off";
-
-  const head = document.createElement("div");
-  head.className = "mode-head";
-  const name = document.createElement("span");
-  name.className = "mode-name";
-  name.textContent = mode.name;
-  head.append(name, switchButton(mode.enabled, `${mode.name} mode`, mode.id));
-  card.append(head, segmented(TONES, mode.tone, mode.id));
-
-  const apps = document.createElement("div");
-  apps.className = "mode-apps";
-  if (fallback) {
-    const none = document.createElement("span");
-    none.className = "row-sub";
-    none.textContent = "Used when nothing else matches";
-    apps.append(none);
-  } else {
-    for (const [index, target] of mode.targets.entries()) {
-      const chip = document.createElement("span");
-      chip.className = "app-chip";
-      chip.title = target.kind === "site" ? "Website" : "App";
-      chip.append(document.createTextNode(target.name));
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.textContent = "×";
-      remove.setAttribute("aria-label", `Remove ${target.name}`);
-      remove.dataset.action = "remove-target";
-      remove.dataset.mode = mode.id;
-      remove.dataset.index = String(index);
-      chip.append(remove);
-      apps.append(chip);
-    }
-    if (mode.targets.length === 0) {
-      const none = document.createElement("span");
-      none.className = "row-sub";
-      none.textContent = "No apps or sites yet";
-      apps.append(none);
-    }
-    const add = document.createElement("button");
-    add.type = "button";
-    add.className = "chip";
-    add.textContent = "+ Add current";
-    add.title = "Add the app or website you last dictated into";
-    add.dataset.action = "add-target";
-    add.dataset.mode = mode.id;
-    apps.append(add);
-  }
-  card.append(apps);
-  return card;
 }
 
 /// Adds whatever the last dictation was in. A website is preferred when there was
@@ -769,8 +860,37 @@ async function addCurrent(modeId) {
     return;
   }
   mode.targets.push(target);
+  expandedMode = mode.id;
   await persistCleanup(true);
   toast(`Added ${target.name} to ${mode.name}`);
+}
+
+// One button, then the one question it cannot answer: which mode.
+function toggleModePicker() {
+  const picker = $("mode-picker");
+  if (!picker.hidden) {
+    picker.hidden = true;
+    $("btn-add-current").textContent = "+ Add current app";
+    return;
+  }
+  picker.replaceChildren();
+  for (const mode of cleanup?.modes.filter((entry) => entry.id !== "general") ?? []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chip";
+    button.textContent = mode.name;
+    button.dataset.action = "add-to";
+    button.dataset.mode = mode.id;
+    picker.append(button);
+  }
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "chip";
+  cancel.textContent = "Cancel";
+  cancel.dataset.action = "cancel-add";
+  picker.append(cancel);
+  picker.hidden = false;
+  $("btn-add-current").textContent = "Which mode?";
 }
 
 function syncPromptModes() {
@@ -814,22 +934,45 @@ function wireCleanup() {
     showCleanupPrompt();
   });
 
-  $("mode-list").addEventListener("click", (event) => {
+  $("mode-group").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
     if (!button || !cleanup) return;
     const mode = cleanup.modes.find((entry) => entry.id === button.dataset.mode);
     if (!mode) return;
-    if (button.dataset.action === "toggle-mode") {
-      mode.enabled = !mode.enabled;
-      persistCleanup(true);
-    } else if (button.dataset.action === "tone") {
-      mode.tone = button.dataset.value;
-      persistCleanup(true).then(showCleanupPrompt);
+    if (button.dataset.action === "expand") {
+      expandedMode = expandedMode === mode.id ? null : mode.id;
+      renderCleanup();
     } else if (button.dataset.action === "remove-target") {
       mode.targets.splice(Number(button.dataset.index), 1);
       persistCleanup(true);
-    } else if (button.dataset.action === "add-target") {
-      addCurrent(mode.id);
+    }
+  });
+
+  $("mode-group").addEventListener("change", (event) => {
+    const select = event.target.closest("select[data-action='tone']");
+    if (!select || !cleanup) return;
+    const mode = cleanup.modes.find((entry) => entry.id === select.dataset.mode);
+    if (!mode) return;
+    if (select.value === "off") {
+      mode.enabled = false;
+    } else {
+      mode.enabled = true;
+      mode.tone = select.value;
+    }
+    persistCleanup(true);
+  });
+
+  $("btn-add-current").addEventListener("click", toggleModePicker);
+
+  $("mode-picker").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button || !cleanup) return;
+    if (button.dataset.action === "cancel-add") {
+      toggleModePicker();
+      return;
+    }
+    if (button.dataset.action === "add-to") {
+      addCurrent(button.dataset.mode);
     }
   });
 

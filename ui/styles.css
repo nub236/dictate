@@ -456,7 +456,10 @@ button.ghost:hover { background: var(--panel); }
 }
 .toast.show { opacity: 1; }
 
-/* personalization */
+/* cleanup */
+
+.cleanup-head { gap: 8px; }
+.cleanup-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 
 .cleanup-scroll {
   flex: 1;
@@ -464,8 +467,179 @@ button.ghost:hover { background: var(--panel); }
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 24px;
   padding-right: 2px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-title {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Edit level is the one control that changes every dictation, so it leads. */
+.section-title.lead {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.section-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.section-hint.inline { font-size: 11px; }
+
+/* modes: one grouped list, one row each */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.group > * + * { border-top: 1px solid var(--line); }
+
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 10px 0 12px;
+}
+
+.row-main {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-name { flex: none; font-size: 12.5px; }
+
+.row-apps {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chevron {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  transition: transform .12s ease;
+}
+
+.row-main[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+
+.tone-field {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.tone-field::after {
+  content: "▾";
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-52%);
+  font-size: 9px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.tone {
+  flex: none;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 17px 3px 7px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--chip);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.tone:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.group-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px 11px;
+}
+
+.mode-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.mode-picker[hidden] { display: none; }
+
+.add-current { align-self: flex-start; }
+
+/* preview */
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.preview-said {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.preview-got {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.preview-got::before {
+  content: "→ ";
+  color: var(--muted);
 }
 
 .text-area {
@@ -494,34 +668,6 @@ button.ghost:hover { background: var(--panel); }
   .text-area:focus { box-shadow: 0 0 0 3px rgba(10, 132, 255, .28); }
 }
 
-.mode-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.mode-card {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
-}
-
-.mode-card.is-off { opacity: .55; }
-
-.mode-head { display: flex; align-items: center; gap: 8px; }
-.mode-name { flex: 1; font-size: 12.5px; font-weight: 550; }
-
-.mode-apps {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-}
-
 .app-chip {
   display: inline-flex;
   align-items: center;
@@ -545,22 +691,21 @@ button.ghost:hover { background: var(--panel); }
 
 .app-chip button:hover { color: var(--danger); }
 
-/* segmented control */
+/* segmented control, kept for the one global dial */
 
 .segmented {
   display: flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--line);
+  gap: 4px;
+  padding: 3px;
   border-radius: var(--radius-sm);
-  background: var(--chip);
+  background: var(--panel);
 }
 
 .segmented button {
   flex: 1;
   font: inherit;
-  font-size: 11.5px;
-  padding: 3px 0;
+  font-size: 12px;
+  padding: 5px 0;
   border: 0;
   border-radius: calc(var(--radius-sm) - 2px);
   background: transparent;
@@ -571,27 +716,24 @@ button.ghost:hover { background: var(--panel); }
 .segmented button[aria-pressed="true"] {
   background: var(--bg);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .14);
 }
-
-.segmented.small { align-self: flex-start; }
 
 /* advanced */
 
 .advanced {
-  border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
-  padding: 8px 10px;
+  padding: 10px 12px;
 }
 
 .advanced summary {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--muted);
   cursor: pointer;
 }
 
-.advanced[open] summary { margin-bottom: 8px; }
+.advanced[open] summary { margin-bottom: 10px; }
 
 .advanced .field { margin-bottom: 8px; }
 
