@@ -440,10 +440,56 @@ fn data_dir() -> PathBuf {
 }
 
 fn load_config(dir: &Path) -> Config {
-    std::fs::read_to_string(dir.join("config.json"))
+    let mut config: Config = std::fs::read_to_string(dir.join("config.json"))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    migrate(&mut config.cleanup);
+    config
+}
+
+/// The Coding presets this app shipped before the AI tools replaced them.
+///
+/// Used only to recognise a save that was never edited: replacing an untouched
+/// preset is a fix, and replacing a customised one would throw work away.
+const LEGACY_CODE_TARGETS: &[(&str, &str)] = &[
+    ("app", "com.apple.dt.Xcode"),
+    ("app", "com.microsoft.VSCode|code"),
+    ("app", "dev.zed.Zed|zed"),
+    ("app", "com.apple.Terminal|WindowsTerminal|wt"),
+    ("app", "com.googlecode.iterm2"),
+    ("site", "github"),
+    ("site", "gitlab"),
+    ("site", "stackoverflow"),
+];
+
+/// Brings a saved configuration up to what this build expects.
+///
+/// A saved `modes` list is the user's, so serde defaults never touch it: without
+/// this, a config written by an older build keeps its old modes forever. Only a
+/// missing row is added and only an untouched preset is replaced.
+fn migrate(cleanup: &mut Cleanup) {
+    let defaults = default_modes();
+    if !cleanup.modes.iter().any(|mode| mode.id == "general") {
+        if let Some(general) = defaults.iter().find(|mode| mode.id == "general") {
+            cleanup.modes.push(general.clone());
+        }
+    }
+    if let Some(mode) = cleanup.modes.iter_mut().find(|mode| mode.id == "code") {
+        // Two shapes shipped before: the five apps, and the same five with the
+        // three sites. Anything else has been edited by hand.
+        let untouched = matches!(mode.targets.len(), 5 | 8)
+            && mode.targets.iter().all(|target| {
+                LEGACY_CODE_TARGETS
+                    .iter()
+                    .any(|(kind, id)| target.kind == *kind && target.id == *id)
+            });
+        if untouched {
+            if let Some(replacement) = defaults.iter().find(|mode| mode.id == "code") {
+                mode.targets = replacement.targets.clone();
+            }
+        }
+    }
 }
 
 fn save_config(dir: &PathBuf, config: &Config) -> Result<(), String> {
@@ -1940,6 +1986,71 @@ mod config_tests {
         let raw = serde_json::to_string(&config).unwrap();
         let back: Config = serde_json::from_str(&raw).unwrap();
         assert_eq!(back.snippets, config.snippets);
+    }
+
+    #[test]
+    fn an_older_save_gains_the_fallback_row_and_the_new_coding_presets() {
+        // What an older build wrote: no General row, and Coding still on Xcode.
+        let mut cleanup = Cleanup::default();
+        cleanup.modes.retain(|mode| mode.id != "general");
+        for mode in cleanup.modes.iter_mut() {
+            if mode.id == "code" {
+                mode.targets = LEGACY_CODE_TARGETS
+                    .iter()
+                    .map(|(kind, id)| Target {
+                        kind: kind.to_string(),
+                        id: id.to_string(),
+                        name: id.to_string(),
+                    })
+                    .collect();
+            }
+        }
+        migrate(&mut cleanup);
+        assert!(cleanup.modes.iter().any(|mode| mode.id == "general"));
+        let code = cleanup.modes.iter().find(|mode| mode.id == "code").unwrap();
+        assert!(code.targets.iter().any(|target| target.name == "Claude"));
+        assert!(!code.targets.iter().any(|target| target.name.contains("Xcode")));
+    }
+
+    #[test]
+    fn the_five_app_coding_mode_of_the_first_build_is_migrated_too() {
+        let mut cleanup = Cleanup::default();
+        cleanup.modes.retain(|mode| mode.id != "general");
+        for mode in cleanup.modes.iter_mut() {
+            if mode.id == "code" {
+                mode.targets = LEGACY_CODE_TARGETS
+                    .iter()
+                    .filter(|(kind, _)| *kind == "app")
+                    .map(|(kind, id)| Target {
+                        kind: kind.to_string(),
+                        id: id.to_string(),
+                        name: id.to_string(),
+                    })
+                    .collect();
+            }
+        }
+        migrate(&mut cleanup);
+        let code = cleanup.modes.iter().find(|mode| mode.id == "code").unwrap();
+        assert!(code.targets.iter().any(|target| target.name == "Terminal"));
+        assert!(!code.targets.iter().any(|target| target.name.contains("Zed")));
+    }
+
+    #[test]
+    fn a_coding_mode_the_user_changed_is_left_alone() {
+        let mut cleanup = Cleanup::default();
+        for mode in cleanup.modes.iter_mut() {
+            if mode.id == "code" {
+                mode.targets.push(Target {
+                    kind: "app".into(),
+                    id: "com.example.mine".into(),
+                    name: "Mine".into(),
+                });
+            }
+        }
+        migrate(&mut cleanup);
+        let code = cleanup.modes.iter().find(|mode| mode.id == "code").unwrap();
+        assert!(code.targets.iter().any(|target| target.name == "Mine"));
+        assert!(code.targets.iter().any(|target| target.name == "Claude"));
     }
 
     #[test]
