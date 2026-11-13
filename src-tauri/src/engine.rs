@@ -59,40 +59,314 @@ pub enum HotkeySignal {
 /// The operating system this build runs on, as the UI spells it.
 pub const PLATFORM: &str = std::env::consts::OS;
 
-/// The app the user is dictating into.
+/// The app the user is dictating into, and the site when that app is a browser.
 #[derive(Clone, Debug)]
 pub struct FrontApp {
-    /// Bundle identifier on macOS, executable name on Windows.
+    /// Bundle identifier on macOS, program name on Windows.
     pub id: String,
     pub name: String,
+    /// A short name for the page, e.g. `discord`. Only set for a browser, and
+    /// only ever derived from the window title: no URL, no address bar, no page
+    /// content. It is what lets a rule say "Discord, whichever browser".
+    pub site: Option<String>,
 }
 
-/// Samples the app in front.
+/// Browsers, by the pieces their bundle ids and program names contain.
+const BROWSERS: &[&str] = &[
+    "safari", "chrome", "chromium", "firefox", "edgemac", "msedge", "brave", "arc", "vivaldi",
+    "opera", "orion", "zen",
+];
+
+fn is_browser(id: &str) -> bool {
+    let id = id.to_lowercase();
+    BROWSERS.iter().any(|browser| id.contains(browser))
+}
+
+/// The site a window title names.
 ///
-/// Only the app's identity is read: no window title, no page content, nothing
-/// the user typed. A title would carry document names and email subjects, which
-/// is exactly the kind of thing that should never leave the machine.
+/// Browsers put the page in the title and their own name at the end, so
+/// "#general | Discord - Mozilla Firefox" is the Discord page. A domain, when
+/// the title carries one, is the strongest identity available; otherwise the
+/// page's own name is used. This is the only place a window title is read, and
+/// only a short token survives it: the title itself is neither stored nor sent.
+fn site_from_title(title: &str) -> Option<String> {
+    let mut parts: Vec<&str> = title.split(" - ").map(str::trim).collect();
+    while parts.len() > 1 && is_browser(parts.last()?.trim()) {
+        parts.pop();
+    }
+    if let Some(domain) = parts.iter().filter_map(|part| find_domain(part)).next() {
+        return Some(domain);
+    }
+    // Without a domain, the page's own name is the single-word piece of the
+    // title nearest the end: "Inbox (3) - someone@gmail.com - Gmail" is Gmail,
+    // and "GitHub - nub/dictate: app" is GitHub. A "#channel | Site" title
+    // names the site after the pipe, as Slack's does.
+    for part in parts.iter().rev() {
+        let candidate = part.rsplit('|').next().unwrap_or(part).trim();
+        if candidate.is_empty()
+            || candidate.contains(|c: char| c.is_whitespace() || c == '/' || c == ':')
+        {
+            continue;
+        }
+        let token = token_of(candidate);
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+    let first = parts.first().copied().unwrap_or(title);
+    let token = token_of(first.trim());
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+fn token_of(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// The first domain-shaped word in `text`, lowercased and without a path.
+fn find_domain(text: &str) -> Option<String> {
+    for word in text.split(|c: char| c.is_whitespace() || c == '/' || c == '(' || c == ')') {
+        let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '-');
+        // An email address is not a site, and one in a title is usually the
+        // account's own address. Nothing that looks like one leaves the app.
+        if word.contains('@') {
+            continue;
+        }
+        let lower = word.to_lowercase();
+        let mut labels = lower.split('.');
+        let Some(first) = labels.next() else { continue };
+        if first.len() < 2 {
+            continue;
+        }
+        let rest: Vec<&str> = labels.collect();
+        let Some(tld) = rest.last() else { continue };
+        if rest.iter().any(|label| {
+            label.len() < 2 || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }) {
+            continue;
+        }
+        if tld.chars().all(|c| c.is_ascii_alphabetic()) && (2..=24).contains(&tld.len()) {
+            return Some(lower);
+        }
+    }
+    None
+}
+
 #[cfg(target_os = "macos")]
 pub fn front_app() -> Option<FrontApp> {
     use objc2_app_kit::NSWorkspace;
     let workspace = NSWorkspace::sharedWorkspace();
     let app = workspace.frontmostApplication()?;
     let id = app.bundleIdentifier()?.to_string();
-    let name = app.localizedName()
+    let name = app
+        .localizedName()
         .map(|name| name.to_string())
         .unwrap_or_else(|| id.clone());
     // Dictate's own window is never a dictation target.
     if id == "dev.dictate.mic" {
         return None;
     }
-    Some(FrontApp { id, name })
+    let site = if is_browser(&id) {
+        window_title(app.processIdentifier()).and_then(|title| site_from_title(&title))
+    } else {
+        None
+    };
+    Some(FrontApp { id, name, site })
 }
 
-/// Windows needs a foreground-window query that is not written yet, so every
-/// dictation there uses the Global prompt alone.
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub fn front_app() -> Option<FrontApp> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    };
+
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(window, &mut pid);
+
+        // The title names the page when the front window is a browser's.
+        let mut buffer = [0u16; 512];
+        let length = GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32);
+        let title = String::from_utf16_lossy(&buffer[..length.max(0) as usize]);
+
+        // The program name is the stable identity here, as the bundle id is on
+        // macOS. A display name would follow the language of the install.
+        let mut program = String::new();
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if !process.is_null() {
+            let mut path = [0u16; 1024];
+            let mut size = path.len() as u32;
+            if QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut size) != 0 {
+                program = String::from_utf16_lossy(&path[..size as usize]);
+            }
+            CloseHandle(process);
+        }
+        let file = Path::new(&program)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())?;
+        if file.is_empty() {
+            return None;
+        }
+        let name = file.strip_suffix(".exe").unwrap_or(&file).to_string();
+        let id = name.to_lowercase();
+        if id == "dictate" {
+            return None;
+        }
+        let site = if is_browser(&id) {
+            site_from_title(&title)
+        } else {
+            None
+        };
+        Some(FrontApp { id, name, site })
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn front_app() -> Option<FrontApp> {
     None
+}
+
+/// Reading the focused window's title on macOS.
+///
+/// The accessibility API is used because it asks for no new permission: the
+/// grant pasting already needs is the same one. Without it every call fails
+/// quietly and the app falls back to the app-only rule.
+#[cfg(target_os = "macos")]
+mod ax {
+    use std::ffi::CString;
+
+    type CFTypeRef = *const std::ffi::c_void;
+
+    /// kCFStringEncodingUTF8.
+    const UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringCreateWithCString(
+            allocator: CFTypeRef,
+            bytes: *const i8,
+            encoding: u32,
+        ) -> CFTypeRef;
+        fn CFStringGetLength(string: CFTypeRef) -> isize;
+        fn CFStringGetCString(
+            string: CFTypeRef,
+            buffer: *mut i8,
+            size: isize,
+            encoding: u32,
+        ) -> u8;
+        fn CFRelease(value: CFTypeRef);
+    }
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> CFTypeRef;
+        fn AXUIElementCopyAttributeValue(
+            element: CFTypeRef,
+            attribute: CFTypeRef,
+            value: *mut CFTypeRef,
+        ) -> i32;
+    }
+
+    /// The title of the focused window of `pid`, or nothing when the app has no
+    /// window, has no title, or the accessibility grant is missing.
+    pub fn focused_title(pid: i32) -> Option<String> {
+        unsafe {
+            let application = AXUIElementCreateApplication(pid);
+            if application.is_null() {
+                return None;
+            }
+            let window = attribute(application, "AXFocusedWindow");
+            CFRelease(application);
+            let window = window?;
+            let title = attribute(window, "AXTitle");
+            CFRelease(window);
+            let title = title?;
+            let text = text_of(title);
+            CFRelease(title);
+            text
+        }
+    }
+
+    unsafe fn attribute(element: CFTypeRef, name: &str) -> Option<CFTypeRef> {
+        let name = CString::new(name).ok()?;
+        let key = CFStringCreateWithCString(std::ptr::null(), name.as_ptr(), UTF8);
+        if key.is_null() {
+            return None;
+        }
+        let mut value: CFTypeRef = std::ptr::null();
+        let status = AXUIElementCopyAttributeValue(element, key, &mut value);
+        CFRelease(key);
+        if status == 0 && !value.is_null() {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    unsafe fn text_of(value: CFTypeRef) -> Option<String> {
+        let length = CFStringGetLength(value);
+        if length <= 0 {
+            return None;
+        }
+        let mut buffer = vec![0i8; length as usize * 4 + 1];
+        let size = buffer.len() as isize;
+        if CFStringGetCString(value, buffer.as_mut_ptr(), size, UTF8) == 0 {
+            return None;
+        }
+        Some(std::ffi::CStr::from_ptr(buffer.as_ptr()).to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn window_title(pid: i32) -> Option<String> {
+    ax::focused_title(pid)
+}
+
+#[cfg(test)]
+mod site_tests {
+    use super::site_from_title;
+
+    /// The browser's own name is the tail of the title, and the page is what is
+    /// left: that is the whole job here.
+    #[test]
+    fn a_page_is_named_from_the_title_without_the_browser() {
+        let cases = [
+            ("#general | Discord - Mozilla Firefox", Some("discord")),
+            // A "#channel | Site" title names the site last, as Slack's does.
+            ("general | Slack - Google Chrome", Some("slack")),
+            ("Discord | Slack - Google Chrome", Some("slack")),
+            ("GitHub - nub/dictate: app - Google Chrome", Some("github")),
+            // Gmail's title carries the account's address. It must never become
+            // the site, or the domain, that gets sent with a dictation.
+            ("Inbox (3) - someone@gmail.com - Gmail", Some("gmail")),
+            ("", None),
+        ];
+        for (title, expected) in cases {
+            let got = site_from_title(title);
+            assert_eq!(got.as_deref(), expected, "title: {title:?}");
+        }
+    }
+
+    #[test]
+    fn version_numbers_are_not_mistaken_for_domains() {
+        // "1.5" and "v2.0" look like hostnames to a loose matcher, and would be
+        // sent as the site.
+        assert_eq!(site_from_title("Release notes 1.5 - Google Chrome").as_deref(), Some("releasenotes15"));
+    }
 }
 
 /// Where to send the user when a grant is missing. Only macOS has a per-app

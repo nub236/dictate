@@ -750,6 +750,7 @@ dependencies = [
  "tauri-build",
  "tauri-nspanel",
  "tauri-plugin-autostart",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

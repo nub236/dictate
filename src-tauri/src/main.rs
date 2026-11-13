@@ -120,72 +120,134 @@ tauri_nspanel::tauri_panel! {
     })
 }
 
-/// An app a mode applies to.
+/// An app or a site a mode claims.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Target {
-    /// Bundle identifier on macOS, executable name on Windows.
+    /// "app" or "site". A site is checked before any app, so Discord in Firefox
+    /// resolves as Discord.
+    #[serde(default = "default_kind")]
+    kind: String,
+    /// Bundle identifier on macOS, program name on Windows, and the page's own
+    /// name for a site. Alternatives are separated by `|`, because the same app
+    /// is named differently on each platform.
     id: String,
+    /// What the page shows for it.
     name: String,
 }
 
+fn default_kind() -> String {
+    "app".into()
+}
+
+fn brand(value: &str) -> String {
+    value.split('.').next().unwrap_or(value).to_lowercase()
+}
+
 impl Target {
+    /// True when this is what `app` is, as an app or as the page showing in it.
     fn matches(&self, app: &engine::FrontApp) -> bool {
-        (!self.id.is_empty() && self.id.to_lowercase() == app.id.to_lowercase())
-            || (!self.name.is_empty() && self.name.to_lowercase() == app.name.to_lowercase())
+        if self.kind == "site" {
+            return app.site.as_deref().is_some_and(|site| self.site_hits(site));
+        }
+        self.alternatives()
+            .any(|id| id.eq_ignore_ascii_case(&app.id))
+            || self.alternatives()
+                .any(|id| id.eq_ignore_ascii_case(&app.name))
+    }
+
+    fn alternatives(&self) -> impl Iterator<Item = &str> {
+        self.id
+            .split('|')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
+
+    /// A site is known by a name, not a URL, because the title is all the app
+    /// reads. `discord` and `discord.com` are the same site either way.
+    fn site_hits(&self, site: &str) -> bool {
+        let site = site.trim().to_lowercase();
+        if site.is_empty() {
+            return false;
+        }
+        self.alternatives().any(|candidate| {
+            let candidate = candidate.to_lowercase();
+            candidate == site || brand(&candidate) == brand(&site)
+        })
     }
 }
 
-/// A kind of writing, and the apps it applies to.
+/// A kind of writing, and the apps and sites it applies to.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Mode {
     id: String,
     name: String,
-    /// Off means this mode never applies, whatever app is in front.
+    /// Off means this mode never applies, whatever is in front.
     #[serde(default = "default_true")]
     enabled: bool,
-    prompt: String,
-    #[serde(default)]
-    apps: Vec<Target>,
+    /// "casual", "neutral" or "formal".
+    #[serde(default = "default_tone")]
+    tone: String,
+    /// The apps and sites that resolve to this mode.
+    #[serde(default, alias = "apps")]
+    targets: Vec<Target>,
 }
 
-/// The rewrite applied to each transcript before it is pasted.
+fn default_tone() -> String {
+    "neutral".into()
+}
+
+/// How much rewriting is allowed, for every mode.
+fn default_edit_level() -> String {
+    "balanced".into()
+}
+
+/// The cleanup pass applied to each transcript before it is pasted.
 ///
-/// On by default, because a failed rewrite can never cost the dictation: the
+/// On by default, because a failed pass can never cost the dictation: the
 /// pipeline falls back to the raw transcript on every error.
 #[derive(Serialize, Deserialize, Clone)]
-struct Enhancement {
+struct Cleanup {
     #[serde(default = "default_true")]
     enabled: bool,
     /// The model slug to rewrite with. Discovery can return an empty list on a
     /// free plan, so a model that answers is kept here.
-    #[serde(default = "default_enhance_model")]
+    #[serde(default = "default_model")]
     model: String,
-    /// Instructions that apply to every dictation. Empty means the built-in
-    /// cleanup pass.
-    #[serde(default)]
-    prompt: String,
-    /// Per-kind instructions, chosen by the app in front.
+    #[serde(default = "default_edit_level")]
+    edit_level: String,
+    /// The user's own additions, applied after every other rule so they can
+    /// refine the result without breaking the rules underneath.
+    #[serde(default, alias = "prompt")]
+    instructions: String,
+    /// Per-kind conventions, chosen by what is in front.
     #[serde(default = "default_modes")]
     modes: Vec<Mode>,
 }
 
-impl Default for Enhancement {
+impl Default for Cleanup {
     fn default() -> Self {
-        Enhancement {
+        Cleanup {
             enabled: true,
-            model: default_enhance_model(),
-            prompt: String::new(),
+            model: default_model(),
+            edit_level: default_edit_level(),
+            instructions: String::new(),
             modes: default_modes(),
         }
     }
 }
 
-fn default_enhance_model() -> String {
+fn default_model() -> String {
     enhance::DEFAULT_MODEL.to_string()
 }
 
 fn default_modes() -> Vec<Mode> {
-    let target = |id: &str, name: &str| Target {
+    let app = |id: &str, name: &str| Target {
+        kind: "app".into(),
+        id: id.to_string(),
+        name: name.to_string(),
+    };
+    let site = |id: &str, name: &str| Target {
+        kind: "site".into(),
         id: id.to_string(),
         name: name.to_string(),
     };
@@ -194,69 +256,101 @@ fn default_modes() -> Vec<Mode> {
             id: "messaging".into(),
             name: "Messaging".into(),
             enabled: true,
-            prompt: "Write this as a chat message: no greeting and no sign-off, light \
-                     punctuation, and keep it short. Do not add anything the speaker did not say."
-                .into(),
-            apps: vec![
-                target("com.tinyspeck.slackmacgap", "Slack"),
-                target("com.apple.MobileSMS", "Messages"),
-                target("net.whatsapp.WhatsApp", "WhatsApp"),
-                target("com.hnc.Discord", "Discord"),
+            tone: "casual".into(),
+            targets: vec![
+                app("com.tinyspeck.slackmacgap|slack", "Slack"),
+                site("slack", "slack"),
+                app("com.hnc.Discord|Discord", "Discord"),
+                site("discord", "discord"),
+                app("com.apple.MobileSMS|Messages", "Messages"),
+                app("net.whatsapp.WhatsApp|WhatsApp", "WhatsApp"),
+                site("whatsapp", "whatsapp"),
+                app("org.telegram.desktop|Telegram", "Telegram"),
+                app("com.microsoft.teams2|ms-teams", "Teams"),
             ],
         },
         Mode {
             id: "email".into(),
             name: "Email".into(),
             enabled: true,
-            prompt: "Write this as an email: complete sentences, a paragraph wherever the \
-                     speaker changed subject, and a greeting only if one was spoken. Never invent \
-                     names, dates or details."
-                .into(),
-            apps: vec![
-                target("com.apple.mail", "Mail"),
-                target("com.microsoft.Outlook", "Outlook"),
-                target("com.readdle.smartemail-Mac", "Spark"),
-                target("com.superhuman.Superhuman", "Superhuman"),
+            tone: "neutral".into(),
+            targets: vec![
+                app("com.apple.mail|Mail", "Mail"),
+                app("com.microsoft.Outlook|olk", "Outlook"),
+                app("com.readdle.smartemail-Mac", "Spark"),
+                app("com.superhuman.Superhuman", "Superhuman"),
+                site("gmail", "gmail"),
+                site("outlook", "outlook"),
             ],
         },
         Mode {
             id: "notes".into(),
             name: "Notes".into(),
             enabled: true,
-            prompt: "Write this as notes: keep every point the speaker made, one per line where \
-                     they naturally separate, and drop conversational filler."
-                .into(),
-            apps: vec![
-                target("com.apple.Notes", "Notes"),
-                target("md.obsidian", "Obsidian"),
-                target("notion.id", "Notion"),
-                target("com.apple.TextEdit", "TextEdit"),
+            tone: "neutral".into(),
+            targets: vec![
+                app("com.apple.Notes|notepad", "Notes"),
+                app("md.obsidian|Obsidian", "Obsidian"),
+                app("notion.id|Notion", "Notion"),
+                site("notion", "notion"),
+                app("com.apple.TextEdit", "TextEdit"),
             ],
         },
         Mode {
-            id: "coding".into(),
-            name: "Coding".into(),
+            id: "code".into(),
+            name: "Code".into(),
             enabled: true,
-            prompt: "Clean this up for a developer: keep technical terms, identifiers, file names \
-                     and symbols exactly as spoken, and fix only punctuation and capitalization."
-                .into(),
-            apps: vec![
-                target("com.apple.dt.Xcode", "Xcode"),
-                target("com.microsoft.VSCode", "Visual Studio Code"),
-                target("dev.zed.Zed", "Zed"),
-                target("com.apple.Terminal", "Terminal"),
-                target("com.googlecode.iterm2", "iTerm"),
+            tone: "neutral".into(),
+            targets: vec![
+                app("com.apple.dt.Xcode", "Xcode"),
+                app("com.microsoft.VSCode|code", "VS Code"),
+                app("dev.zed.Zed|zed", "Zed"),
+                app("com.apple.Terminal|WindowsTerminal|wt", "Terminal"),
+                app("com.googlecode.iterm2", "iTerm"),
+                site("github", "github"),
+                site("gitlab", "gitlab"),
+                site("stackoverflow", "stackoverflow"),
             ],
+        },
+        Mode {
+            id: "general".into(),
+            name: "General".into(),
+            enabled: true,
+            tone: "neutral".into(),
+            targets: Vec::new(),
         },
     ]
 }
 
-/// The first enabled mode that claims this app.
-fn mode_for<'a>(modes: &'a [Mode], app: Option<&engine::FrontApp>) -> Option<&'a Mode> {
-    let app = app?;
-    modes
+/// The mode a front app resolves to, in the order the rules are decided.
+///
+/// A site rule wins over an app rule, so Discord in Firefox is Discord rather
+/// than a browser. Nothing matching falls back to General.
+fn mode_for<'a>(cleanup: &'a Cleanup, app: Option<&engine::FrontApp>) -> Option<&'a Mode> {
+    if let Some(app) = app {
+        for mode in cleanup.modes.iter().filter(|mode| mode.enabled && mode.id != "general") {
+            if mode
+                .targets
+                .iter()
+                .any(|target| target.kind == "site" && target.matches(app))
+            {
+                return Some(mode);
+            }
+        }
+        for mode in cleanup.modes.iter().filter(|mode| mode.enabled && mode.id != "general") {
+            if mode
+                .targets
+                .iter()
+                .any(|target| target.kind != "site" && target.matches(app))
+            {
+                return Some(mode);
+            }
+        }
+    }
+    cleanup
+        .modes
         .iter()
-        .find(|mode| mode.enabled && mode.apps.iter().any(|target| target.matches(app)))
+        .find(|mode| mode.enabled && mode.id == "general")
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -272,8 +366,8 @@ struct Config {
     #[serde(default)]
     snippets: Vec<snippets::Snippet>,
     /// Rewriting each transcript with the user's ChatGPT account.
-    #[serde(default)]
-    enhancement: Enhancement,
+    #[serde(default, alias = "enhancement")]
+    cleanup: Cleanup,
     /// Start with the system. A menu-bar dictation app that has to be launched
     /// by hand after every restart does not do its job, so this defaults on.
     /// There is deliberately no UI for it: macOS shows its own notification and
@@ -303,7 +397,7 @@ impl Default for Config {
             onboarded: false,
             keywords: Vec::new(),
             snippets: Vec::new(),
-            enhancement: Enhancement::default(),
+            cleanup: Cleanup::default(),
             launch_at_login: true,
         }
     }
@@ -639,8 +733,7 @@ fn build_menu(app: &AppHandle, history: &[Value]) -> tauri::Result<Menu<Wry>> {
     let history_menu = Submenu::with_items(app, "History", true, &refs)?;
     let keywords_item = MenuItem::with_id(app, "keywords", "Keywords", true, None::<&str>)?;
     let snippets_item = MenuItem::with_id(app, "snippets", "Snippets", true, None::<&str>)?;
-    let personalize_item =
-        MenuItem::with_id(app, "personalization", "Personalization", true, None::<&str>)?;
+    let cleanup_item = MenuItem::with_id(app, "cleanup", "Cleanup", true, None::<&str>)?;
     // Lands on the account screen rather than the welcome tour: sign out and the
     // permission states are the only things this needs to reach after setup.
     let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
@@ -653,7 +746,7 @@ fn build_menu(app: &AppHandle, history: &[Value]) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &keywords_item,
             &snippets_item,
-            &personalize_item,
+            &cleanup_item,
             &settings_item,
             &PredefinedMenuItem::separator(app)?,
             &quit,
@@ -793,49 +886,46 @@ fn cancel_recording(app: &AppHandle) {
     let _ = app.emit("recording-cancelled", json!({}));
 }
 
-/// What the prompt setting means: the user's text, or the built-in pass.
-fn prompt_for(enhancement: &Enhancement) -> String {
-    let prompt = enhancement.prompt.trim();
-    if prompt.is_empty() {
-        enhance::DEFAULT_INSTRUCTIONS.to_string()
-    } else {
-        prompt.to_string()
-    }
-}
-
 /// Rewrites a transcript when the setting is on.
 ///
 /// A rewrite may never cost the dictation: the raw transcript comes back
 /// unchanged on every failure, and the reason goes to the log rather than to the
 /// user, who is about to paste either way.
-fn enhance_transcript(state: &AppState, transcript: &str) -> String {
-    let app = state.last_app.lock().unwrap().clone();
-    let (enabled, model, global, mode) = {
+fn cleanup_transcript(state: &AppState, transcript: &str, vocabulary: &[String]) -> String {
+    let target = state.last_app.lock().unwrap().clone();
+    let (enabled, model, level, custom, mode) = {
         let config = state.config.lock().unwrap();
+        let cleanup = &config.cleanup;
         (
-            config.enhancement.enabled,
-            config.enhancement.model.clone(),
-            prompt_for(&config.enhancement),
-            mode_for(&config.enhancement.modes, app.as_ref())
-                .map(|mode| (mode.name.clone(), mode.prompt.clone())),
+            cleanup.enabled,
+            cleanup.model.clone(),
+            cleanup.edit_level.clone(),
+            cleanup.instructions.clone(),
+            mode_for(cleanup, target.as_ref()).map(|mode| (mode.id.clone(), mode.tone.clone())),
         )
     };
     if !enabled {
         return transcript.to_string();
     }
-    let instructions = enhance::compose_instructions(
-        &global,
-        mode.as_ref().map(|(_, prompt)| prompt.as_str()),
-        app.as_ref().map(|app| app.name.as_str()),
-    );
-    let label = mode
+    let mode_id = mode.as_ref().map(|(id, _)| id.as_str()).unwrap_or("general");
+    let tone = mode.as_ref().map(|(_, tone)| tone.as_str()).unwrap_or("neutral");
+    // The site is the more specific context when there is one: dictating into
+    // Discord in Firefox is not dictating into a browser.
+    let context = target
         .as_ref()
-        .map(|(name, _)| name.as_str())
-        .unwrap_or("global");
+        .map(|app| app.site.clone().unwrap_or_else(|| app.name.clone()));
+    let instructions = enhance::compose_instructions(&enhance::Prompt {
+        mode: enhance::mode_prompt(mode_id),
+        tone: enhance::tone_prompt(tone),
+        level: enhance::level_prompt(&level),
+        context: context.as_deref(),
+        vocabulary,
+        custom: &custom,
+    });
     let credentials = match auth::valid(&state.auth_file) {
         Ok(credentials) => credentials,
         Err(error) => {
-            debug_log(&format!("enhance: skipped ({error})"));
+            debug_log(&format!("cleanup: skipped ({error})"));
             return transcript.to_string();
         }
     };
@@ -847,7 +937,7 @@ fn enhance_transcript(state: &AppState, transcript: &str) -> String {
     match enhance::enhance(&account, &model, &instructions, transcript) {
         Ok(text) => {
             debug_log(&format!(
-                "enhance: ok in {}ms, {} chars -> {} chars ({model}, {label})",
+                "cleanup: ok in {}ms, {} chars -> {} chars ({model}, {mode_id}/{tone}/{level})",
                 started.elapsed().as_millis(),
                 transcript.chars().count(),
                 text.chars().count()
@@ -856,7 +946,7 @@ fn enhance_transcript(state: &AppState, transcript: &str) -> String {
         }
         Err(failure) => {
             debug_log(&format!(
-                "enhance: failed ({}): {} -- pasting the raw transcript",
+                "cleanup: failed ({}): {} -- pasting the raw transcript",
                 failure.status, failure.message
             ));
             transcript.to_string()
@@ -995,21 +1085,27 @@ fn handle_toggle(app: &AppHandle) {
             }
             debug_log(&format!("transcribe: ok ({})", &transcript.chars().take(60).collect::<String>()));
 
-            // Rewrite with the account the transcription already used, before
-            // anything local runs: keyword spellings and snippets stay
-            // authoritative over the model, and a failed rewrite leaves the raw
-            // transcript exactly as it came back.
-            let transcript = enhance_transcript(&state, &transcript);
+            // The vocabulary is given to the model, so cleanup owns spelling.
+            // Fuzzy matching is the fallback for when cleanup is off: it guesses
+            // at the words the model was told exactly.
+            let (cleanup_on, custom_words) = {
+                let config = state.config.lock().unwrap();
+                (config.cleanup.enabled, config.keywords.clone())
+            };
+            let transcript = cleanup_transcript(&state, &transcript, &custom_words);
 
-            // Fix names and terms locally, before the text is saved or pasted.
-            let custom_words = state.config.lock().unwrap().keywords.clone();
-            let corrected = keywords::apply(&transcript, &custom_words);
-            if corrected != transcript {
-                debug_log(&format!(
-                    "keywords: corrected ({})",
-                    &corrected.chars().take(60).collect::<String>()
-                ));
-            }
+            let corrected = if cleanup_on {
+                transcript
+            } else {
+                let corrected = keywords::apply(&transcript, &custom_words);
+                if corrected != transcript {
+                    debug_log(&format!(
+                        "keywords: corrected ({})",
+                        &corrected.chars().take(60).collect::<String>()
+                    ));
+                }
+                corrected
+            };
             // Then expand snippets: spoken phrase in, something longer out.
             let document_snippets = state.config.lock().unwrap().snippets.clone();
             let expanded = snippets::apply(&corrected, &document_snippets);
@@ -1090,16 +1186,13 @@ fn set_testing(value: bool) {
     debug_log(&format!("testing flag: {value}"));
 }
 
-/// What the Personalization page shows.
+/// What the Cleanup page shows.
 #[tauri::command]
-fn load_enhancement(app: AppHandle) -> Value {
+fn load_cleanup(app: AppHandle) -> Value {
     let state = app.state::<AppState>();
-    let enhancement = state.config.lock().unwrap().enhancement.clone();
+    let cleanup = state.config.lock().unwrap().cleanup.clone();
     let last = state.last_app.lock().unwrap().clone();
-    json!({
-        "enhancement": enhancement,
-        "last_app": last.map(|app| json!({ "id": app.id, "name": app.name })),
-    })
+    json!({ "cleanup": cleanup, "last_app": front_app_json(&last) })
 }
 
 /// Saves the page.
@@ -1107,29 +1200,71 @@ fn load_enhancement(app: AppHandle) -> Value {
 /// The stored value comes back so the page renders what was actually written,
 /// not what it hoped was written.
 #[tauri::command]
-fn save_enhancement(app: AppHandle, enhancement: Value) -> Result<Value, String> {
-    let parsed: Enhancement = serde_json::from_value(enhancement)
-        .map_err(|error| format!("Could not save personalization: {error}"))?;
+fn save_cleanup(app: AppHandle, cleanup: Value) -> Result<Value, String> {
+    let parsed: Cleanup = serde_json::from_value(cleanup)
+        .map_err(|error| format!("Could not save cleanup settings: {error}"))?;
     let state = app.state::<AppState>();
     let config = {
         let mut config = state.config.lock().unwrap();
-        config.enhancement = parsed;
+        config.cleanup = parsed;
         config.clone()
     };
     save_config(&state.dir, &config)?;
-    Ok(serde_json::to_value(&config.enhancement).unwrap_or(Value::Null))
+    Ok(serde_json::to_value(&config.cleanup).unwrap_or(Value::Null))
 }
 
-/// The app the last dictation was started in, so the page can offer to add it to
-/// a mode without asking the user for a bundle identifier.
+/// The app or site the last dictation was started in, so a mode can claim it
+/// without the user having to find a bundle identifier.
 #[tauri::command]
 fn last_app(app: AppHandle) -> Value {
     let state = app.state::<AppState>();
     let last = state.last_app.lock().unwrap().clone();
-    match last {
-        Some(app) => json!({ "id": app.id, "name": app.name }),
+    front_app_json(&last)
+}
+
+fn front_app_json(app: &Option<engine::FrontApp>) -> Value {
+    match app {
+        Some(app) => json!({ "id": app.id, "name": app.name, "site": app.site }),
         None => Value::Null,
     }
+}
+
+/// The instructions the model would receive for one mode, for the read-only
+/// view in Advanced. Seeing the whole prompt is what makes a fixed preset
+/// trustworthy rather than a black box.
+#[tauri::command]
+fn cleanup_prompt(app: AppHandle, mode: String) -> String {
+    let state = app.state::<AppState>();
+    let target = state.last_app.lock().unwrap().clone();
+    let (level, custom, vocabulary, tone, context_prompt) = {
+        let config = state.config.lock().unwrap();
+        let cleanup = &config.cleanup;
+        let wanted = if mode.trim().is_empty() { "general" } else { mode.trim() };
+        let tone = cleanup
+            .modes
+            .iter()
+            .find(|entry| entry.id == wanted)
+            .map(|entry| entry.tone.clone())
+            .unwrap_or_else(default_tone);
+        (
+            cleanup.edit_level.clone(),
+            cleanup.instructions.clone(),
+            config.keywords.clone(),
+            tone,
+            wanted.to_string(),
+        )
+    };
+    let context = target
+        .as_ref()
+        .map(|app| app.site.clone().unwrap_or_else(|| app.name.clone()));
+    enhance::compose_instructions(&enhance::Prompt {
+        mode: enhance::mode_prompt(&context_prompt),
+        tone: enhance::tone_prompt(&tone),
+        level: enhance::level_prompt(&level),
+        context: context.as_deref(),
+        vocabulary: &vocabulary,
+        custom: &custom,
+    })
 }
 
 /// Toggles a recording from inside the app's own window.
@@ -1558,8 +1693,9 @@ fn main() {
             set_keywords,
             get_snippets,
             set_snippets,
-            load_enhancement,
-            save_enhancement,
+            load_cleanup,
+            save_cleanup,
+            cleanup_prompt,
             last_app,
             sign_in,
             sign_out,
@@ -1608,7 +1744,7 @@ fn main() {
                         stop_hotkey(app);
                         app.exit(0);
                     }
-                    "personalization" => show_window(app, "enhancement"),
+                    "cleanup" => show_window(app, "cleanup"),
                     "settings" => show_window(app, "signin"),
                     "keywords" => show_window(app, "keywords"),
                     "snippets" => show_window(app, "snippets"),
@@ -1782,6 +1918,7 @@ mod config_tests {
                 trigger: "my email".into(),
                 replacement: "someone@example.com".into(),
             }],
+            cleanup: Cleanup::default(),
             launch_at_login: true,
         };
         let raw = serde_json::to_string(&config).unwrap();

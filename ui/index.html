@@ -137,28 +137,49 @@
       </footer>
     </section>
 
-    <!-- ---------------- personalization ---------------- -->
-    <section class="view" id="view-enhancement" hidden>
-      <h1>Personalization</h1>
-      <p class="lede">How Dictate rewrites your words in each app.</p>
+    <!-- ---------------- cleanup ---------------- -->
+    <section class="view" id="view-cleanup" hidden>
+      <h1>Cleanup</h1>
+      <p class="lede">Dictate tidies each transcript before pasting it.</p>
       <div class="row box">
         <div class="grow">
-          <div class="row-title">Enhance dictation</div>
-          <div class="row-sub" id="enh-mode-sub">Loading…</div>
+          <div class="row-title">Clean up dictation</div>
+          <div class="row-sub" id="cleanup-sub">Loading…</div>
         </div>
-        <button class="switch" id="enh-toggle" role="switch" aria-checked="true"
-          aria-label="Enhance dictation"></button>
+        <button class="switch" id="cleanup-toggle" role="switch" aria-checked="true"
+          aria-label="Clean up dictation"></button>
       </div>
-      <div class="enh-scroll">
-        <label class="field">
-          <span class="field-label">Global</span>
-          <textarea class="text-area" id="enh-global" rows="3" spellcheck="false"
-            placeholder="Instructions that apply to every dictation"></textarea>
-        </label>
+      <div class="cleanup-scroll">
+        <div class="field">
+          <span class="field-label">Edit level</span>
+          <div class="segmented" id="level-group">
+            <button type="button" data-level="light">Light</button>
+            <button type="button" data-level="balanced">Balanced</button>
+            <button type="button" data-level="polished">Polished</button>
+          </div>
+          <p class="hint" id="level-hint"></p>
+        </div>
+        <div class="field">
+          <span class="field-label">Modes</span>
+          <p class="hint">Chosen by the app or site you dictate into.</p>
+        </div>
         <div class="mode-list" id="mode-list"></div>
+        <details class="advanced" id="advanced">
+          <summary>Advanced</summary>
+          <label class="field">
+            <span class="field-label">Custom instructions</span>
+            <textarea class="text-area" id="cleanup-custom" rows="3" spellcheck="false"
+              placeholder="Anything else the cleanup should know"></textarea>
+          </label>
+          <label class="field">
+            <span class="field-label">View prompt</span>
+            <select class="text-input" id="prompt-mode"></select>
+          </label>
+          <pre class="prompt-view" id="prompt-view">Open Advanced to see the exact instructions.</pre>
+        </details>
       </div>
       <footer class="actions">
-        <button class="primary" id="btn-enh-done">Done</button>
+        <button class="primary" id="btn-cleanup-done">Done</button>
       </footer>
     </section>
 

@@ -66,6 +66,15 @@ objc2 = "0.6"
 # list instead of quietly asking for a different TCC service.
 macos-accessibility-client = "0.0.1"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Which program has focus, and the title of its window, so a page in a browser
+# can be recognised as a site rather than just "Firefox".
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true

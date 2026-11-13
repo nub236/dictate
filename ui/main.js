@@ -178,8 +178,8 @@ function show(view) {
     setTimeout(() => $("snippet-trigger").focus(), 50);
   }
 
-  if (view === "enhancement") {
-    loadEnhancement();
+  if (view === "cleanup") {
+    loadCleanup();
   }
 
   if (view === "done") {
@@ -580,190 +580,271 @@ async function addSnippet() {
   trigger.focus();
 }
 
-/* ------------------------------------------------------------ personalization */
+/* -------------------------------------------------------------------- cleanup */
 
-let enhancement = null;
-let enhanceTimer = null;
+const LEVEL_HINTS = {
+  light: "Fillers, corrections and punctuation only. Nothing else changes.",
+  balanced: "Also fixes grammar and shapes the lists you dictated.",
+  polished: "May smooth awkward phrasing, keeping every point.",
+};
 
-async function loadEnhancement() {
+// Register is per mode: Slack should not read like an email.
+const TONES = [
+  ["casual", "Casual"],
+  ["neutral", "Neutral"],
+  ["formal", "Formal"],
+];
+
+let cleanup = null;
+let cleanupTimer = null;
+
+async function loadCleanup() {
   try {
-    const state = await invoke("load_enhancement");
-    enhancement = state.enhancement;
-    // The app the last dictation was started in, so a mode can claim it without
-    // the user having to know a bundle identifier.
-    enhancement.lastApp = state.last_app;
+    const state = await invoke("load_cleanup");
+    cleanup = state.cleanup;
+    // The app or site the last dictation was started in, so a mode can claim it
+    // without the user having to find a bundle identifier.
+    cleanup.lastApp = state.last_app;
   } catch (error) {
     toast(String(error));
-    enhancement = null;
+    cleanup = null;
   }
-  renderEnhancement();
+  renderCleanup();
 }
 
-// A save on every keystroke would fight the textarea for focus, so prompt edits
-// go out a moment after typing stops.
-function queueEnhancementSave() {
-  clearTimeout(enhanceTimer);
-  enhanceTimer = setTimeout(persistEnhancement, 500);
+// A save on every keystroke would fight the textarea for focus, so edits go out
+// a moment after typing stops.
+function queueCleanupSave() {
+  clearTimeout(cleanupTimer);
+  cleanupTimer = setTimeout(() => persistCleanup(), 500);
 }
 
-async function persistEnhancement() {
-  if (!enhancement) return;
-  clearTimeout(enhanceTimer);
-  const lastApp = enhancement.lastApp;
+async function persistCleanup(render = false) {
+  if (!cleanup) return;
+  clearTimeout(cleanupTimer);
+  const lastApp = cleanup.lastApp;
   try {
-    enhancement = await invoke("save_enhancement", { enhancement });
-    enhancement.lastApp = lastApp;
+    cleanup = await invoke("save_cleanup", { cleanup });
+    cleanup.lastApp = lastApp;
   } catch (error) {
     toast(String(error));
-    await loadEnhancement();
+    await loadCleanup();
+    return;
   }
+  if (render) renderCleanup();
 }
 
-function switchButton(checked, label) {
+function switchButton(checked, label, modeId) {
   const button = document.createElement("button");
+  button.type = "button";
   button.className = "switch";
   button.setAttribute("role", "switch");
   button.setAttribute("aria-checked", checked ? "true" : "false");
   button.setAttribute("aria-label", label);
+  button.dataset.action = "toggle-mode";
+  button.dataset.mode = modeId;
   return button;
 }
 
-function renderEnhancement() {
+function segmented(options, current, modeId) {
+  const group = document.createElement("div");
+  group.className = "segmented small";
+  for (const [value, label] of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.dataset.action = "tone";
+    button.dataset.mode = modeId;
+    button.dataset.value = value;
+    button.setAttribute("aria-pressed", value === current ? "true" : "false");
+    group.append(button);
+  }
+  return group;
+}
+
+function renderCleanup() {
   const list = $("mode-list");
   list.replaceChildren();
-  if (!enhancement) {
-    $("enh-mode-sub").textContent = "Could not load settings";
+  if (!cleanup) {
+    $("cleanup-sub").textContent = "Could not load settings";
     return;
   }
 
-  $("enh-toggle").setAttribute("aria-checked", enhancement.enabled ? "true" : "false");
-  if ($("enh-global").value !== (enhancement.prompt || "")) {
-    $("enh-global").value = enhancement.prompt || "";
+  $("cleanup-toggle").setAttribute("aria-checked", cleanup.enabled ? "true" : "false");
+  $("level-hint").textContent = LEVEL_HINTS[cleanup.edit_level] || LEVEL_HINTS.balanced;
+  for (const button of $("level-group").querySelectorAll("button")) {
+    button.setAttribute(
+      "aria-pressed",
+      button.dataset.level === cleanup.edit_level ? "true" : "false",
+    );
   }
-  const on = enhancement.modes.filter((mode) => mode.enabled).length;
-  $("enh-mode-sub").textContent = enhancement.enabled
-    ? `${on} of ${enhancement.modes.length} modes on`
-    : "Off — transcripts are pasted as transcribed";
+  if ($("cleanup-custom").value !== (cleanup.instructions || "")) {
+    $("cleanup-custom").value = cleanup.instructions || "";
+  }
+  const on = cleanup.modes.filter((mode) => mode.enabled).length;
+  $("cleanup-sub").textContent = cleanup.enabled
+    ? `${on} of ${cleanup.modes.length} modes on`
+    : "Off — text is pasted exactly as transcribed";
 
-  for (const mode of enhancement.modes) {
-    const card = document.createElement("div");
-    card.className = mode.enabled ? "mode-card" : "mode-card is-off";
+  for (const mode of cleanup.modes) {
+    list.append(modeCard(mode));
+  }
+  syncPromptModes();
+}
 
-    const head = document.createElement("div");
-    head.className = "mode-head";
-    const name = document.createElement("span");
-    name.className = "mode-name";
-    name.textContent = mode.name;
-    const toggle = switchButton(mode.enabled, `${mode.name} mode`);
-    toggle.dataset.mode = mode.id;
-    toggle.dataset.action = "toggle-mode";
-    head.append(name, toggle);
+function modeCard(mode) {
+  const card = document.createElement("div");
+  const fallback = mode.id === "general";
+  card.className = mode.enabled ? "mode-card" : "mode-card is-off";
 
-    const prompt = document.createElement("textarea");
-    prompt.className = "text-area";
-    prompt.rows = 3;
-    prompt.spellcheck = false;
-    prompt.value = mode.prompt;
-    prompt.dataset.mode = mode.id;
-    prompt.dataset.action = "prompt";
+  const head = document.createElement("div");
+  head.className = "mode-head";
+  const name = document.createElement("span");
+  name.className = "mode-name";
+  name.textContent = mode.name;
+  head.append(name, switchButton(mode.enabled, `${mode.name} mode`, mode.id));
+  card.append(head, segmented(TONES, mode.tone, mode.id));
 
-    const apps = document.createElement("div");
-    apps.className = "mode-apps";
-    for (const app of mode.apps) {
+  const apps = document.createElement("div");
+  apps.className = "mode-apps";
+  if (fallback) {
+    const none = document.createElement("span");
+    none.className = "row-sub";
+    none.textContent = "Used when nothing else matches";
+    apps.append(none);
+  } else {
+    for (const [index, target] of mode.targets.entries()) {
       const chip = document.createElement("span");
       chip.className = "app-chip";
-      chip.append(document.createTextNode(app.name));
+      chip.title = target.kind === "site" ? "Website" : "App";
+      chip.append(document.createTextNode(target.name));
       const remove = document.createElement("button");
+      remove.type = "button";
       remove.textContent = "×";
-      remove.title = `Remove ${app.name}`;
-      remove.setAttribute("aria-label", `Remove ${app.name}`);
+      remove.setAttribute("aria-label", `Remove ${target.name}`);
+      remove.dataset.action = "remove-target";
       remove.dataset.mode = mode.id;
-      remove.dataset.app = app.id;
-      remove.dataset.action = "remove-app";
+      remove.dataset.index = String(index);
       chip.append(remove);
       apps.append(chip);
     }
-    if (mode.apps.length === 0) {
+    if (mode.targets.length === 0) {
       const none = document.createElement("span");
       none.className = "row-sub";
-      none.textContent = "No apps yet";
+      none.textContent = "No apps or sites yet";
       apps.append(none);
     }
     const add = document.createElement("button");
+    add.type = "button";
     add.className = "chip";
-    add.textContent = "+ Last app";
-    add.title = "Add the app you last dictated into";
+    add.textContent = "+ Add current";
+    add.title = "Add the app or website you last dictated into";
+    add.dataset.action = "add-target";
     add.dataset.mode = mode.id;
-    add.dataset.action = "add-app";
     apps.append(add);
-
-    card.append(head, prompt, apps);
-    list.append(card);
   }
+  card.append(apps);
+  return card;
 }
 
-async function addLastApp(modeId) {
-  const mode = enhancement?.modes.find((entry) => entry.id === modeId);
+/// Adds whatever the last dictation was in. A website is preferred when there was
+/// one, because a site rule beats a browser's app rule and survives any browser.
+async function addCurrent(modeId) {
+  const mode = cleanup?.modes.find((entry) => entry.id === modeId);
   if (!mode) return;
-  let info = enhancement.lastApp;
-  if (!info) {
-    info = await invoke("last_app").catch(() => null);
-  }
+  const info = cleanup.lastApp || (await invoke("last_app").catch(() => null));
   if (!info) {
     toast("Dictate into an app first, then add it here");
     return;
   }
-  if (mode.apps.some((app) => app.id === info.id)) {
-    toast(`${info.name} is already in ${mode.name}`);
+  const target = info.site
+    ? { kind: "site", id: info.site, name: info.site }
+    : { kind: "app", id: info.id || "", name: info.name };
+  if (!target.id) {
+    toast(`Could not read ${info.name}`);
     return;
   }
-  mode.apps.push({ id: info.id, name: info.name });
-  await persistEnhancement();
-  renderEnhancement();
+  if (mode.targets.some((entry) => entry.kind === target.kind && entry.id === target.id)) {
+    toast(`${target.name} is already in ${mode.name}`);
+    return;
+  }
+  mode.targets.push(target);
+  await persistCleanup(true);
+  toast(`Added ${target.name} to ${mode.name}`);
 }
 
-function wireEnhancement() {
-  $("enh-toggle").addEventListener("click", async () => {
-    if (!enhancement) return;
-    enhancement.enabled = !enhancement.enabled;
-    await persistEnhancement();
-    renderEnhancement();
+function syncPromptModes() {
+  const select = $("prompt-mode");
+  const ids = cleanup.modes.map((mode) => mode.id).join(",");
+  if (select.dataset.ids === ids) return;
+  const wanted = select.value;
+  select.replaceChildren();
+  for (const mode of cleanup.modes) {
+    const option = document.createElement("option");
+    option.value = mode.id;
+    option.textContent = mode.name;
+    select.append(option);
+  }
+  select.dataset.ids = ids;
+  if (cleanup.modes.some((mode) => mode.id === wanted)) select.value = wanted;
+}
+
+async function showCleanupPrompt() {
+  const view = $("prompt-view");
+  if (!cleanup || !$("advanced").open) return;
+  try {
+    view.textContent = await invoke("cleanup_prompt", { mode: $("prompt-mode").value });
+  } catch (error) {
+    view.textContent = String(error);
+  }
+}
+
+function wireCleanup() {
+  $("cleanup-toggle").addEventListener("click", async () => {
+    if (!cleanup) return;
+    cleanup.enabled = !cleanup.enabled;
+    await persistCleanup(true);
   });
 
-  $("enh-global").addEventListener("input", () => {
-    if (!enhancement) return;
-    enhancement.prompt = $("enh-global").value;
-    queueEnhancementSave();
+  $("level-group").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-level]");
+    if (!button || !cleanup) return;
+    cleanup.edit_level = button.dataset.level;
+    await persistCleanup(true);
+    showCleanupPrompt();
   });
 
   $("mode-list").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
-    if (!button || !enhancement) return;
-    const mode = enhancement.modes.find((entry) => entry.id === button.dataset.mode);
+    if (!button || !cleanup) return;
+    const mode = cleanup.modes.find((entry) => entry.id === button.dataset.mode);
     if (!mode) return;
     if (button.dataset.action === "toggle-mode") {
       mode.enabled = !mode.enabled;
-      persistEnhancement().then(renderEnhancement);
-    } else if (button.dataset.action === "remove-app") {
-      mode.apps = mode.apps.filter((app) => app.id !== button.dataset.app);
-      persistEnhancement().then(renderEnhancement);
-    } else if (button.dataset.action === "add-app") {
-      addLastApp(mode.id);
+      persistCleanup(true);
+    } else if (button.dataset.action === "tone") {
+      mode.tone = button.dataset.value;
+      persistCleanup(true).then(showCleanupPrompt);
+    } else if (button.dataset.action === "remove-target") {
+      mode.targets.splice(Number(button.dataset.index), 1);
+      persistCleanup(true);
+    } else if (button.dataset.action === "add-target") {
+      addCurrent(mode.id);
     }
   });
 
-  $("mode-list").addEventListener("input", (event) => {
-    const field = event.target.closest("textarea[data-action='prompt']");
-    if (!field || !enhancement) return;
-    const mode = enhancement.modes.find((entry) => entry.id === field.dataset.mode);
-    if (!mode) return;
-    mode.prompt = field.value;
-    queueEnhancementSave();
+  $("cleanup-custom").addEventListener("input", () => {
+    if (!cleanup) return;
+    cleanup.instructions = $("cleanup-custom").value;
+    queueCleanupSave();
   });
 
-  $("btn-enh-done").addEventListener("click", async () => {
-    clearTimeout(enhanceTimer);
-    await persistEnhancement();
+  $("prompt-mode").addEventListener("change", showCleanupPrompt);
+  $("advanced").addEventListener("toggle", showCleanupPrompt);
+
+  $("btn-cleanup-done").addEventListener("click", async () => {
+    clearTimeout(cleanupTimer);
+    await persistCleanup();
     try {
       await invoke("complete_onboarding");
     } catch (error) {
@@ -1204,7 +1285,7 @@ function wire() {
     }
   });
 
-  wireEnhancement();
+  wireCleanup();
   attachCapture("capture", "capture-value", "capture-hint");
 
   listen("sign-in-finished", (event) => {

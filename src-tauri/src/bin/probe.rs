@@ -35,7 +35,16 @@ const SCOPES: &str = "openid profile email offline_access";
 /// self-correction and no punctuation.
 const SAMPLE: &str = "so um i think we should uh move the meeting to thursday no wait friday at two";
 
-const INSTRUCTIONS: &str = enhance::DEFAULT_INSTRUCTIONS;
+fn instructions() -> String {
+    enhance::compose_instructions(&enhance::Prompt {
+        mode: enhance::MODE_MESSAGING,
+        tone: enhance::TONE_CASUAL,
+        level: enhance::LEVEL_BALANCED,
+        context: Some("Slack"),
+        vocabulary: &["Freebuff".to_string()],
+        custom: "",
+    })
+}
 
 /// Where the app keeps its files, mirroring `data_dir` in `main.rs`.
 fn data_dir() -> PathBuf {
@@ -256,11 +265,11 @@ fn main() {
 
     println!("\n== rewrite ==");
     println!("model: {model}");
-    println!("instructions: {INSTRUCTIONS}");
+    println!("instructions: {}", instructions());
     println!("input: {SAMPLE}");
 
     let started = std::time::Instant::now();
-    match enhance::enhance(&account, &model, INSTRUCTIONS, SAMPLE) {
+    match enhance::enhance(&account, &model, &instructions(), SAMPLE) {
         Ok(text) => {
             println!("\nok in {:.2}s", started.elapsed().as_secs_f64());
             println!("output: {text}");
