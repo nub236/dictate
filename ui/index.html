@@ -139,17 +139,19 @@
 
     <!-- ---------------- cleanup ---------------- -->
     <section class="view" id="view-cleanup" hidden>
-      <div class="row cleanup-head">
+      <h1>Cleanup</h1>
+      <p class="lede">Tidies each transcript before pasting it.</p>
+      <div class="row box">
         <div class="grow">
-          <div class="cleanup-title">Clean up dictation</div>
-          <div class="row-sub" id="cleanup-sub">Tidies each transcript before pasting.</div>
+          <div class="row-title">Clean up dictation</div>
+          <div class="row-sub" id="cleanup-sub">On</div>
         </div>
         <button class="switch" id="cleanup-toggle" role="switch" aria-checked="true"
           aria-label="Clean up dictation"></button>
       </div>
       <div class="cleanup-scroll">
         <section class="section">
-          <div class="section-title lead">Edit level</div>
+          <div class="section-title">Edit level</div>
           <div class="segmented" id="level-group">
             <button type="button" data-level="light">Light</button>
             <button type="button" data-level="balanced">Balanced</button>
@@ -159,11 +161,9 @@
         </section>
 
         <section class="section">
-          <div class="section-head">
-            <span class="section-title">Modes</span>
-            <span class="section-hint inline">Chosen by app or site</span>
-          </div>
-          <div class="group" id="mode-group"></div>
+          <div class="section-title">Modes</div>
+          <p class="section-hint">Chosen by the app or site you dictate into.</p>
+          <div class="mode-list" id="mode-list"></div>
         </section>
 
         <details class="advanced" id="advanced">

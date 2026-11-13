@@ -602,8 +602,14 @@ const TONE_OPTIONS = [...TONES, ["off", "Off"]];
 let cleanup = null;
 let cleanupTimer = null;
 let expandedMode = null;
-// What is installed and running, for the app picker. Asked once per page load.
+// What is running, for the app picker. Asked once per page load.
 let computerApps = [];
+
+/// General is the mode nothing else resolved to, and it reads better as the row
+/// it is: the apps that are not listed above.
+function modeLabel(mode) {
+  return mode.id === "general" ? "Other apps" : mode.name;
+}
 
 async function loadCleanup() {
   try {
@@ -651,7 +657,7 @@ function toneSelect(mode) {
   select.className = "tone";
   select.dataset.action = "tone";
   select.dataset.mode = mode.id;
-  select.setAttribute("aria-label", `${mode.name} tone`);
+  select.setAttribute("aria-label", `${modeLabel(mode)} tone`);
   for (const [value, label] of TONE_OPTIONS) {
     const option = document.createElement("option");
     option.value = value;
@@ -663,6 +669,7 @@ function toneSelect(mode) {
 }
 
 function modeSummary(mode) {
+  if (mode.id === "general") return "Used when nothing else matches";
   // A mode can hold the same name twice (the app and the website), so the
   // summary counts what the row is claiming, not how many rules it took.
   const seen = new Set();
@@ -696,7 +703,7 @@ function appPicker(mode) {
   select.className = "app-picker";
   select.dataset.action = "add-app";
   select.dataset.mode = mode.id;
-  select.setAttribute("aria-label", `Add an app to ${mode.name}`);
+  select.setAttribute("aria-label", `Add an app to ${modeLabel(mode)}`);
   const placeholder = document.createElement("option");
   placeholder.value = "";
   placeholder.textContent = "Add app…";
@@ -710,45 +717,44 @@ function appPicker(mode) {
   return select;
 }
 
-function modeRow(mode) {
+function modeCard(mode) {
   const fallback = mode.id === "general";
-  const row = document.createElement("div");
-  row.className = "group-row";
+  const card = document.createElement("div");
+  card.className = "mode-card";
 
+  const row = document.createElement("div");
+  row.className = "mode-row";
+
+  // Two lines, so a long list of apps never has to be cut off to make room for
+  // a chevron that the tone menu was already competing with.
   const main = document.createElement("button");
   main.type = "button";
-  main.className = "row-main";
+  main.className = "mode-main";
   main.dataset.action = fallback ? "nothing" : "expand";
   main.dataset.mode = mode.id;
   main.setAttribute("aria-expanded", String(!fallback && expandedMode === mode.id));
 
   const name = document.createElement("span");
-  name.className = "row-name";
-  name.textContent = mode.name;
+  name.className = "mode-name";
+  name.textContent = modeLabel(mode);
   const summary = document.createElement("span");
-  summary.className = "row-apps";
-  summary.textContent = fallback ? "Used when nothing else matches" : modeSummary(mode);
+  summary.className = "mode-apps";
+  summary.textContent = modeSummary(mode);
   main.append(name, summary);
-  if (!fallback) {
-    const chevron = document.createElement("span");
-    chevron.className = "chevron";
-    chevron.textContent = "›";
-    main.append(chevron);
-  }
 
   // The select carries no arrow of its own once the native one is turned off,
   // so the wrapper draws it: a chip with no caret does not read as a menu.
   const toneField = document.createElement("span");
   toneField.className = "tone-field";
   toneField.append(toneSelect(mode));
-  row.append(main, toneField);
 
-  const fragment = document.createDocumentFragment();
-  fragment.append(row);
-  if (fallback || expandedMode !== mode.id) return fragment;
+  row.append(main, toneField);
+  card.append(row);
+
+  if (fallback || expandedMode !== mode.id) return card;
 
   const detail = document.createElement("div");
-  detail.className = "group-detail";
+  detail.className = "mode-detail";
   if (mode.targets.length === 0) {
     const none = document.createElement("span");
     none.className = "row-sub";
@@ -772,21 +778,22 @@ function modeRow(mode) {
   }
   const picker = appPicker(mode);
   if (picker) detail.append(picker);
-  fragment.append(detail);
-  return fragment;
+  card.append(detail);
+  return card;
 }
 
 function renderCleanup() {
-  const group = $("mode-group");
-  group.replaceChildren();
+  const list = $("mode-list");
+  list.replaceChildren();
   if (!cleanup) {
     $("cleanup-sub").textContent = "Could not load settings";
     return;
   }
 
-  $("cleanup-toggle").setAttribute("aria-checked", cleanup.enabled ? "true" : "false");
-  $("cleanup-sub").textContent = cleanup.enabled
-    ? "Tidies each transcript before pasting."
+  const on = Boolean(cleanup.enabled);
+  $("cleanup-toggle").setAttribute("aria-checked", on ? "true" : "false");
+  $("cleanup-sub").textContent = on
+    ? "On"
     : "Off — text is pasted exactly as transcribed";
   $("level-hint").textContent = LEVEL_HINTS[cleanup.edit_level] || LEVEL_HINTS.balanced;
   for (const button of $("level-group").querySelectorAll("button")) {
@@ -795,8 +802,14 @@ function renderCleanup() {
       button.dataset.level === cleanup.edit_level ? "true" : "false",
     );
   }
+  // Off is not a label: the dials below are what it switches off, so they dim and
+  // stop taking input. Advanced stays usable so its settings can be prepared.
+  $("view-cleanup").classList.toggle("is-off", !on);
+  for (const section of $("view-cleanup").querySelectorAll(".section")) {
+    section.inert = !on;
+  }
   for (const mode of cleanup.modes) {
-    group.append(modeRow(mode));
+    list.append(modeCard(mode));
   }
   if ($("cleanup-custom").value !== (cleanup.instructions || "")) {
     $("cleanup-custom").value = cleanup.instructions || "";
@@ -813,7 +826,7 @@ function syncPromptModes() {
   for (const mode of cleanup.modes) {
     const option = document.createElement("option");
     option.value = mode.id;
-    option.textContent = mode.name;
+    option.textContent = modeLabel(mode);
     select.append(option);
   }
   select.dataset.ids = ids;
@@ -845,7 +858,7 @@ function wireCleanup() {
     showCleanupPrompt();
   });
 
-  $("mode-group").addEventListener("click", (event) => {
+  $("mode-list").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
     if (!button || !cleanup) return;
     const mode = cleanup.modes.find((entry) => entry.id === button.dataset.mode);
@@ -859,7 +872,7 @@ function wireCleanup() {
     }
   });
 
-  $("mode-group").addEventListener("change", (event) => {
+  $("mode-list").addEventListener("change", (event) => {
     if (!cleanup) return;
     const tone = event.target.closest("select[data-action='tone']");
     if (tone) {

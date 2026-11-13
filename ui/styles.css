@@ -458,16 +458,13 @@ button.ghost:hover { background: var(--panel); }
 
 /* cleanup */
 
-.cleanup-head { gap: 8px; }
-.cleanup-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
-
 .cleanup-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   padding-right: 2px;
 }
 
@@ -477,24 +474,12 @@ button.ghost:hover { background: var(--panel); }
   gap: 8px;
 }
 
+/* One label style for every section: the page should not rank its headings by
+   weight, only by what they control. */
 .section-title {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--muted);
-}
-
-/* Edit level is the one control that changes every dictation, so it leads. */
-.section-title.lead {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text);
-}
-
-.section-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  color: var(--muted);
 }
 
 .section-hint {
@@ -504,35 +489,41 @@ button.ghost:hover { background: var(--panel); }
   color: var(--muted);
 }
 
-.section-hint.inline { font-size: 11px; }
+/* Off dims what it switches off. The class is the fallback for a webview without
+   inert, which does the keyboard and screen-reader half. */
+.is-off .section { opacity: .45; pointer-events: none; }
 
-/* modes: one grouped list, one row each */
+/* modes: the same card list the Keywords page uses */
 
-.group {
+.mode-list {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+}
+
+.mode-card {
   border-radius: var(--radius);
   background: var(--panel);
   overflow: hidden;
 }
 
-.group > * + * { border-top: 1px solid var(--line); }
-
-.group-row {
+.mode-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  min-height: 44px;
-  padding: 0 10px 0 12px;
+  padding: 8px 10px;
 }
 
-.row-main {
+.mode-row:hover { background: var(--hover); }
+
+/* Two lines: the name, then what it claims. */
+.mode-main {
   flex: 1;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
   min-width: 0;
-  padding: 11px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -541,26 +532,26 @@ button.ghost:hover { background: var(--panel); }
   cursor: pointer;
 }
 
-.row-name { flex: none; font-size: 12.5px; }
+.mode-name {
+  font-size: 12.5px;
+}
 
-.row-apps {
-  flex: 1;
+.mode-apps {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11.5px;
   color: var(--muted);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
-.chevron {
-  flex: none;
-  font-size: 12px;
-  color: var(--muted);
-  transition: transform .12s ease;
+.mode-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px 10px;
 }
-
-.row-main[aria-expanded="true"] .chevron { transform: rotate(90deg); }
 
 .tone-field {
   position: relative;
@@ -572,7 +563,7 @@ button.ghost:hover { background: var(--panel); }
   content: "▾";
   position: absolute;
   top: 50%;
-  right: 5px;
+  right: 4px;
   transform: translateY(-52%);
   font-size: 9px;
   color: var(--muted);
@@ -582,8 +573,8 @@ button.ghost:hover { background: var(--panel); }
 .tone {
   flex: none;
   font: inherit;
-  font-size: 11.5px;
-  padding: 3px 17px 3px 7px;
+  font-size: 11px;
+  padding: 2px 15px 2px 6px;
   border: 0;
   border-radius: var(--radius-xs);
   background: var(--chip);
@@ -594,14 +585,6 @@ button.ghost:hover { background: var(--panel); }
 }
 
 .tone:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-.group-detail {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  padding: 0 12px 11px;
-}
 
 .app-picker {
   font: inherit;
@@ -615,6 +598,29 @@ button.ghost:hover { background: var(--panel); }
 }
 
 .app-picker:hover { border-color: var(--muted); color: var(--text); }
+
+.app-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 3px 2px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--chip);
+}
+
+.app-chip button {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.app-chip button:hover { color: var(--danger); }
 
 .text-area {
   width: 100%;
@@ -642,35 +648,12 @@ button.ghost:hover { background: var(--panel); }
   .text-area:focus { box-shadow: 0 0 0 3px rgba(10, 132, 255, .28); }
 }
 
-.app-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  padding: 2px 3px 2px 7px;
-  border-radius: var(--radius-xs);
-  background: var(--chip);
-}
-
-.app-chip button {
-  font: inherit;
-  font-size: 11px;
-  line-height: 1;
-  padding: 0 2px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.app-chip button:hover { color: var(--danger); }
-
 /* segmented control, kept for the one global dial */
 
 .segmented {
   display: flex;
-  gap: 4px;
-  padding: 3px;
+  gap: 3px;
+  padding: 2px;
   border-radius: var(--radius-sm);
   background: var(--panel);
 }
@@ -678,10 +661,10 @@ button.ghost:hover { background: var(--panel); }
 .segmented button {
   flex: 1;
   font: inherit;
-  font-size: 12px;
-  padding: 5px 0;
+  font-size: 11.5px;
+  padding: 4px 0;
   border: 0;
-  border-radius: calc(var(--radius-sm) - 2px);
+  border-radius: calc(var(--radius-sm) - 1px);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -691,6 +674,15 @@ button.ghost:hover { background: var(--panel); }
   background: var(--bg);
   color: var(--text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, .14);
+}
+
+/* In dark mode the track is lighter than the window, so the selected segment has
+   to be lighter than the track: the window colour would read as a hole. */
+@media (prefers-color-scheme: dark) {
+  .segmented button[aria-pressed="true"] {
+    background: var(--panel-strong);
+    box-shadow: none;
+  }
 }
 
 /* advanced */
