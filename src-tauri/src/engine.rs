@@ -180,64 +180,166 @@ pub fn front_app() -> Option<FrontApp> {
     Some(FrontApp { id, name, site })
 }
 
+/// The window's text, or an empty string when it has none.
 #[cfg(target_os = "windows")]
-pub fn front_app() -> Option<FrontApp> {
+fn window_text(window: windows_sys::Win32::Foundation::HWND) -> String {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW;
+    let mut buffer = [0u16; 512];
+    let length = unsafe { GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
+    String::from_utf16_lossy(&buffer[..length.max(0) as usize])
+}
+
+/// The program behind a window, as (id, name).
+///
+/// The program name is the stable identity here, as the bundle id is on macOS:
+/// a display name would follow the language of the install.
+#[cfg(target_os = "windows")]
+fn program_of_window(window: windows_sys::Win32::Foundation::HWND) -> Option<(String, String)> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
-    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
-    unsafe {
-        let window = GetForegroundWindow();
-        if window.is_null() {
-            return None;
-        }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(window, &mut pid);
-
-        // The title names the page when the front window is a browser's.
-        let mut buffer = [0u16; 512];
-        let length = GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32);
-        let title = String::from_utf16_lossy(&buffer[..length.max(0) as usize]);
-
-        // The program name is the stable identity here, as the bundle id is on
-        // macOS. A display name would follow the language of the install.
-        let mut program = String::new();
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if !process.is_null() {
-            let mut path = [0u16; 1024];
-            let mut size = path.len() as u32;
-            if QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut size) != 0 {
-                program = String::from_utf16_lossy(&path[..size as usize]);
-            }
-            CloseHandle(process);
-        }
-        let file = Path::new(&program)
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())?;
-        if file.is_empty() {
-            return None;
-        }
-        let name = file.strip_suffix(".exe").unwrap_or(&file).to_string();
-        let id = name.to_lowercase();
-        if id == "dictate" {
-            return None;
-        }
-        let site = if is_browser(&id) {
-            site_from_title(&title)
-        } else {
-            None
-        };
-        Some(FrontApp { id, name, site })
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(window, &mut pid) };
+    if pid == 0 {
+        return None;
     }
+    let mut program = String::new();
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if !process.is_null() {
+        let mut path = [0u16; 1024];
+        let mut size = path.len() as u32;
+        if unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut size) } != 0 {
+            program = String::from_utf16_lossy(&path[..size as usize]);
+        }
+        unsafe { CloseHandle(process) };
+    }
+    let file = Path::new(&program)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())?;
+    let name = file.strip_suffix(".exe").unwrap_or(&file).to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name.to_lowercase(), name))
+}
+
+#[cfg(target_os = "windows")]
+pub fn front_app() -> Option<FrontApp> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    let window = unsafe { GetForegroundWindow() };
+    if window.is_null() {
+        return None;
+    }
+    let title = window_text(window);
+    let (id, name) = program_of_window(window)?;
+    // Dictate's own window is never a dictation target.
+    if id == "dictate" {
+        return None;
+    }
+    let site = if is_browser(&id) {
+        site_from_title(&title)
+    } else {
+        None
+    };
+    Some(FrontApp { id, name, site })
+}
+
+#[cfg(target_os = "windows")]
+pub fn running_apps() -> Vec<FrontApp> {
+    use std::sync::Mutex;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
+
+    // EnumWindows hands back a callback, not a collection, so the results are
+    // collected in a static. Only one call runs at a time: the page asks once.
+    static FOUND: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+    // The callback's result is the C BOOL the Windows headers use, so 1 keeps
+    // enumeration going and 0 would stop it.
+    unsafe extern "system" fn visit(window: HWND, _param: LPARAM) -> i32 {
+        if IsWindowVisible(window) == 0 || window_text(window).is_empty() {
+            return 1;
+        }
+        if let Some(found) = program_of_window(window) {
+            if found.0 != "dictate" {
+                if let Ok(mut list) = FOUND.lock() {
+                    list.push(found);
+                }
+            }
+        }
+        1
+    }
+
+    if let Ok(mut list) = FOUND.lock() {
+        list.clear();
+    }
+    unsafe { EnumWindows(Some(visit), 0) };
+    let mut apps: Vec<FrontApp> = FOUND
+        .lock()
+        .map(|list| {
+            list.iter()
+                .map(|(id, name)| FrontApp {
+                    id: id.clone(),
+                    name: name.clone(),
+                    site: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    apps.sort_by_key(|app| app.name.to_lowercase());
+    apps.dedup_by(|a, b| a.id == b.id);
+    apps
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn front_app() -> Option<FrontApp> {
     None
+}
+
+/// The apps with a user interface that are running now.
+///
+/// The page offers this list because "the app I am in" is ambiguous: by the time
+/// someone goes looking for the button, Dictate's own window is what the system
+/// says is in front. Picking from what is running is both accurate and faster
+/// than typing a bundle identifier.
+#[cfg(target_os = "macos")]
+pub fn running_apps() -> Vec<FrontApp> {
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
+    let workspace = NSWorkspace::sharedWorkspace();
+    let mut apps: Vec<FrontApp> = Vec::new();
+    for app in workspace.runningApplications().iter() {
+        // Background agents have no window to dictate into.
+        if app.isTerminated() || app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+            continue;
+        }
+        let Some(id) = app.bundleIdentifier().map(|id| id.to_string()) else {
+            continue;
+        };
+        if id == "dev.dictate.mic" {
+            continue;
+        }
+        let name = app
+            .localizedName()
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| id.clone());
+        apps.push(FrontApp {
+            id,
+            name,
+            site: None,
+        });
+    }
+    apps.sort_by_key(|app| app.name.to_lowercase());
+    apps.dedup_by(|a, b| a.id == b.id);
+    apps
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn running_apps() -> Vec<FrontApp> {
+    Vec::new()
 }
 
 /// Reading the focused window's title on macOS.

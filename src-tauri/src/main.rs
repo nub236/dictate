@@ -302,11 +302,15 @@ fn default_modes() -> Vec<Mode> {
             enabled: true,
             tone: "neutral".into(),
             targets: vec![
-                app("com.apple.dt.Xcode", "Xcode"),
-                app("com.microsoft.VSCode|code", "VS Code"),
-                app("dev.zed.Zed|zed", "Zed"),
+                // What people write code in now: assistants with their own app,
+                // or any of these terminals, where the command-line ones run.
+                app("com.anthropic.claudefordesktop|claude", "Claude"),
+                app("com.openai.chat|ChatGPT", "ChatGPT"),
+                app("com.todesktop.230313mzl4w4u92|Cursor", "Cursor"),
                 app("com.apple.Terminal|WindowsTerminal|wt", "Terminal"),
-                app("com.googlecode.iterm2", "iTerm"),
+                app("com.googlecode.iterm2|iTerm2", "iTerm"),
+                app("dev.warp.Warp-Stable|warp", "Warp"),
+                app("com.mitchellh.ghostty|ghostty", "Ghostty"),
                 site("github", "github"),
                 site("gitlab", "gitlab"),
                 site("stackoverflow", "stackoverflow"),
@@ -1222,6 +1226,17 @@ fn last_app(app: AppHandle) -> Value {
     front_app_json(&last)
 }
 
+/// The apps running now, so the page can offer a list instead of asking for a
+/// bundle identifier — or relying on which app was in front a moment ago.
+#[tauri::command]
+fn list_apps() -> Value {
+    let apps: Vec<Value> = engine::running_apps()
+        .into_iter()
+        .map(|app| json!({ "id": app.id, "name": app.name }))
+        .collect();
+    json!(apps)
+}
+
 fn front_app_json(app: &Option<engine::FrontApp>) -> Value {
     match app {
         Some(app) => json!({ "id": app.id, "name": app.name, "site": app.site }),
@@ -1697,6 +1712,7 @@ fn main() {
             save_cleanup,
             cleanup_prompt,
             last_app,
+            list_apps,
             sign_in,
             sign_out,
             reopen_sign_in,

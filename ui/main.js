@@ -588,50 +588,32 @@ const LEVEL_HINTS = {
   polished: "May smooth awkward phrasing, keeping every point.",
 };
 
-// One messy sample, three ways. The level decides how much changes and the tone
-// decides how it reads: local and instant, so every dial moves something visible
-// without spending a request.
-const SAMPLE =
-  "um so like i wanted to, no, i need to move the meeting to friday at 2, uh, and can you send the deck";
-
-const PREVIEW = {
-  light: {
-    casual: "I need to move the meeting to Friday at 2, and can you send the deck?",
-    neutral: "I need to move the meeting to Friday at 2, and can you send the deck?",
-    formal: "I need to move the meeting to Friday at 2. Could you please send the deck?",
-  },
-  balanced: {
-    casual: "I need to move the meeting to Friday at 2. Can you send the deck?",
-    neutral: "I need to move the meeting to Friday at 2. Can you send the deck?",
-    formal: "I need to move the meeting to Friday at 2. Could you please send the deck?",
-  },
-  polished: {
-    casual: "Can we push the meeting to Friday at 2? And send the deck?",
-    neutral: "Let's move the meeting to Friday at 2. Could you send the deck?",
-    formal: "I would like to move the meeting to Friday at 2. Could you please send the deck?",
-  },
-};
-
-// Off is a tone here, not a second switch: a mode nobody wants needs one control,
-// and the row stays in the list where it can be found again.
-const TONE_OPTIONS = [
+// Register is per mode: Slack should not read like an email.
+const TONES = [
   ["casual", "Casual"],
   ["neutral", "Neutral"],
   ["formal", "Formal"],
-  ["off", "Off"],
 ];
+
+// Off is a tone here, not a second switch: a mode nobody wants needs one control,
+// and the row stays in the list where it can be found again.
+const TONE_OPTIONS = [...TONES, ["off", "Off"]];
 
 let cleanup = null;
 let cleanupTimer = null;
 let expandedMode = null;
+// What is installed and running, for the app picker. Asked once per page load.
+let computerApps = [];
 
 async function loadCleanup() {
   try {
-    const state = await invoke("load_cleanup");
+    const [state, apps] = await Promise.all([
+      invoke("load_cleanup"),
+      // A missing list only costs the picker, never the page.
+      invoke("list_apps").catch(() => []),
+    ]);
     cleanup = state.cleanup;
-    // The app or site the last dictation was started in, so a mode can claim it
-    // without the user having to find a bundle identifier.
-    cleanup.lastApp = state.last_app;
+    computerApps = Array.isArray(apps) ? apps : [];
   } catch (error) {
     toast(String(error));
     cleanup = null;
@@ -649,10 +631,8 @@ function queueCleanupSave() {
 async function persistCleanup(render = false) {
   if (!cleanup) return;
   clearTimeout(cleanupTimer);
-  const lastApp = cleanup.lastApp;
   try {
     cleanup = await invoke("save_cleanup", { cleanup });
-    cleanup.lastApp = lastApp;
   } catch (error) {
     toast(String(error));
     await loadCleanup();
@@ -661,70 +641,9 @@ async function persistCleanup(render = false) {
   if (render) renderCleanup();
 }
 
-function brand(value) {
-  return String(value || "").split(".")[0].toLowerCase();
-}
-
-function targetMatches(target, info) {
-  if (!info) return false;
-  if (target.kind === "site") {
-    const site = brand(info.site);
-    return Boolean(site) && brand(target.id) === site;
-  }
-  const id = String(info.id || "").toLowerCase();
-  const name = String(info.name || "").toLowerCase();
-  return String(target.id)
-    .split("|")
-    .map((part) => part.trim().toLowerCase())
-    .some((candidate) => candidate && (candidate === id || candidate === name));
-}
-
-// The same order the app uses: a site rule, then an app rule, then General.
-function activeMode() {
-  if (!cleanup) return null;
-  const info = cleanup.lastApp;
-  const modes = cleanup.modes.filter((mode) => mode.enabled && mode.id !== "general");
-  if (info) {
-    const site = modes.find((mode) =>
-      mode.targets.some((target) => target.kind === "site" && targetMatches(target, info)),
-    );
-    if (site) return site;
-    const app = modes.find((mode) =>
-      mode.targets.some((target) => target.kind !== "site" && targetMatches(target, info)),
-    );
-    if (app) return app;
-  }
-  return cleanup.modes.find((mode) => mode.id === "general") || null;
-}
-
 function toneOf(mode) {
   if (!mode) return "neutral";
   return mode.enabled ? mode.tone : "off";
-}
-
-function renderPreview() {
-  const mode = activeMode();
-  const level = cleanup?.edit_level || "balanced";
-  const tone = toneOf(mode);
-  const outputs = PREVIEW[level] || PREVIEW.balanced;
-  $("preview-said").textContent = `“${SAMPLE}”`;
-  $("preview-got").textContent = outputs[tone === "off" ? "neutral" : tone] || outputs.neutral;
-}
-
-function modeSummary(mode) {
-  // A mode can hold the same name twice (the app and the website), so the
-  // summary counts what the row is claiming, not how many rules it took.
-  const seen = new Set();
-  const names = [];
-  for (const target of mode.targets) {
-    const key = String(target.name).toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    names.push(target.name);
-  }
-  if (names.length === 0) return "No apps or sites yet";
-  const shown = names.slice(0, 2).join(", ");
-  return names.length > 2 ? `${shown} +${names.length - 2}` : shown;
 }
 
 function toneSelect(mode) {
@@ -740,6 +659,54 @@ function toneSelect(mode) {
     select.append(option);
   }
   select.value = toneOf(mode);
+  return select;
+}
+
+function modeSummary(mode) {
+  // A mode can hold the same name twice (the app and the website), so the
+  // summary counts what the row is claiming, not how many rules it took.
+  const seen = new Set();
+  const names = [];
+  for (const target of mode.targets) {
+    const key = String(target.name).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(target.name);
+  }
+  if (names.length === 0) return "No apps yet";
+  const shown = names.slice(0, 2).join(", ");
+  return names.length > 2 ? `${shown} +${names.length - 2}` : shown;
+}
+
+/// The apps that can still be added here: everything running that this mode does
+/// not already claim.
+function addableApps(mode) {
+  return computerApps.filter(
+    (app) =>
+      app &&
+      app.id &&
+      !mode.targets.some((target) => target.kind !== "site" && target.id === app.id),
+  );
+}
+
+function appPicker(mode) {
+  const apps = addableApps(mode);
+  if (apps.length === 0) return null;
+  const select = document.createElement("select");
+  select.className = "app-picker";
+  select.dataset.action = "add-app";
+  select.dataset.mode = mode.id;
+  select.setAttribute("aria-label", `Add an app to ${mode.name}`);
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Add app…";
+  select.append(placeholder);
+  for (const app of apps) {
+    const option = document.createElement("option");
+    option.value = app.id;
+    option.textContent = app.name;
+    select.append(option);
+  }
   return select;
 }
 
@@ -785,7 +752,7 @@ function modeRow(mode) {
   if (mode.targets.length === 0) {
     const none = document.createElement("span");
     none.className = "row-sub";
-    none.textContent = "No apps or sites yet. Use Add current app below.";
+    none.textContent = "No apps yet";
     detail.append(none);
   }
   for (const [index, target] of mode.targets.entries()) {
@@ -803,6 +770,8 @@ function modeRow(mode) {
     chip.append(remove);
     detail.append(chip);
   }
+  const picker = appPicker(mode);
+  if (picker) detail.append(picker);
   fragment.append(detail);
   return fragment;
 }
@@ -829,68 +798,10 @@ function renderCleanup() {
   for (const mode of cleanup.modes) {
     group.append(modeRow(mode));
   }
-  $("mode-picker").hidden = true;
-  $("btn-add-current").textContent = "+ Add current app";
   if ($("cleanup-custom").value !== (cleanup.instructions || "")) {
     $("cleanup-custom").value = cleanup.instructions || "";
   }
-  renderPreview();
   syncPromptModes();
-}
-
-/// Adds whatever the last dictation was in. A website is preferred when there was
-/// one, because a site rule beats a browser's app rule and survives any browser.
-async function addCurrent(modeId) {
-  const mode = cleanup?.modes.find((entry) => entry.id === modeId);
-  if (!mode) return;
-  const info = cleanup.lastApp || (await invoke("last_app").catch(() => null));
-  if (!info) {
-    toast("Dictate into an app first, then add it here");
-    return;
-  }
-  const target = info.site
-    ? { kind: "site", id: info.site, name: info.site }
-    : { kind: "app", id: info.id || "", name: info.name };
-  if (!target.id) {
-    toast(`Could not read ${info.name}`);
-    return;
-  }
-  if (mode.targets.some((entry) => entry.kind === target.kind && entry.id === target.id)) {
-    toast(`${target.name} is already in ${mode.name}`);
-    return;
-  }
-  mode.targets.push(target);
-  expandedMode = mode.id;
-  await persistCleanup(true);
-  toast(`Added ${target.name} to ${mode.name}`);
-}
-
-// One button, then the one question it cannot answer: which mode.
-function toggleModePicker() {
-  const picker = $("mode-picker");
-  if (!picker.hidden) {
-    picker.hidden = true;
-    $("btn-add-current").textContent = "+ Add current app";
-    return;
-  }
-  picker.replaceChildren();
-  for (const mode of cleanup?.modes.filter((entry) => entry.id !== "general") ?? []) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "chip";
-    button.textContent = mode.name;
-    button.dataset.action = "add-to";
-    button.dataset.mode = mode.id;
-    picker.append(button);
-  }
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "chip";
-  cancel.textContent = "Cancel";
-  cancel.dataset.action = "cancel-add";
-  picker.append(cancel);
-  picker.hidden = false;
-  $("btn-add-current").textContent = "Which mode?";
 }
 
 function syncPromptModes() {
@@ -949,30 +860,27 @@ function wireCleanup() {
   });
 
   $("mode-group").addEventListener("change", (event) => {
-    const select = event.target.closest("select[data-action='tone']");
-    if (!select || !cleanup) return;
-    const mode = cleanup.modes.find((entry) => entry.id === select.dataset.mode);
-    if (!mode) return;
-    if (select.value === "off") {
-      mode.enabled = false;
-    } else {
-      mode.enabled = true;
-      mode.tone = select.value;
-    }
-    persistCleanup(true);
-  });
-
-  $("btn-add-current").addEventListener("click", toggleModePicker);
-
-  $("mode-picker").addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button || !cleanup) return;
-    if (button.dataset.action === "cancel-add") {
-      toggleModePicker();
+    if (!cleanup) return;
+    const tone = event.target.closest("select[data-action='tone']");
+    if (tone) {
+      const mode = cleanup.modes.find((entry) => entry.id === tone.dataset.mode);
+      if (!mode) return;
+      if (tone.value === "off") {
+        mode.enabled = false;
+      } else {
+        mode.enabled = true;
+        mode.tone = tone.value;
+      }
+      persistCleanup(true);
       return;
     }
-    if (button.dataset.action === "add-to") {
-      addCurrent(button.dataset.mode);
+    const picker = event.target.closest("select[data-action='add-app']");
+    if (picker && picker.value) {
+      const mode = cleanup.modes.find((entry) => entry.id === picker.dataset.mode);
+      const app = computerApps.find((entry) => entry.id === picker.value);
+      if (!mode || !app) return;
+      mode.targets.push({ kind: "app", id: app.id, name: app.name });
+      persistCleanup(true);
     }
   });
 
